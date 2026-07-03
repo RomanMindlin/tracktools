@@ -1,0 +1,8 @@
+.venv/
+.vscode/
+__pycache__/
+Backup/
+gpx/
+kml/
+Карты/
+data.json

@@ -1,0 +1,6 @@
+fastkml==1.4.0
+geojson==3.3.0
+gpxpy==1.6.2
+lxml==6.1.1
+shapely==2.1.2
+windows-curses==2.4.2
