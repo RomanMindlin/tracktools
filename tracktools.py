@@ -867,6 +867,30 @@ def move_items(json_file: str, ids: list[str], destination_id: str | None) -> in
     return moved
 
 
+def create_folder(json_file: str, name: str, parent_id: str | None = None) -> str | None:
+    """Create a new folder named `name` under parent_id, or at the top level if
+    parent_id is None. Returns the new folder's ID, or None if parent_id was given
+    but doesn't match any existing folder (nothing is written in that case).
+    """
+    with open(json_file, "r", encoding='utf-8') as f:
+        data: dict[str, Any] = json.load(f)
+
+    folders = data.setdefault("folders", [])
+
+    if parent_id is not None and not any(f["id"] == parent_id for f in folders):
+        return None
+
+    folder_data: FolderData = {"id": generate_id(), "name": name}
+    if parent_id:
+        folder_data["parent_id"] = parent_id
+    folders.append(folder_data)
+
+    with open(json_file, "w", encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    return folder_data["id"]
+
+
 def _collect_items_by_ids(data: dict[str, Any], ids: list[str]) -> tuple[list, list, set[str]]:
     """
     Collect points and tracks matching the given IDs (including folder contents).
@@ -1321,6 +1345,11 @@ def main() -> None:
     move_parser.add_argument("--destination", type=str, help="ID of the destination folder")
     move_parser.add_argument("--root", action="store_true", help="Move to the top level (no parent folder), instead of --destination")
 
+    create_folder_parser = subparsers.add_parser("create-folder", help="Create a new folder")
+    create_folder_parser.add_argument("--json-file", type=str, required=True, help="JSON data file")
+    create_folder_parser.add_argument("--name", type=str, required=True, help="Name of the new folder")
+    create_folder_parser.add_argument("--id", type=str, default=None, help="ID of the parent folder (omit to create at the top level)")
+
     args = parser.parse_args()
 
     if args.command == "extract":
@@ -1369,6 +1398,16 @@ def main() -> None:
         destination_id = None if args.root else args.destination
         moved = move_items(args.json_file, ids, destination_id)
         print(f"✅ Moved {moved} items")
+    elif args.command == "create-folder":
+        name = args.name.strip()
+        if not name:
+            print("⚠️  --name cannot be empty")
+            return
+        new_id = create_folder(args.json_file, name, args.id)
+        if new_id:
+            print(f"✅ Created folder '{name}' (id {new_id})")
+        else:
+            print(f"⚠️  No folder found with ID {args.id}")
     else:
         parser.print_help()
 

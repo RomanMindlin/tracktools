@@ -73,7 +73,13 @@ def build_tree(data: dict) -> TreeNode:
         parent.children.append(node)
         folder_nodes[folder_id] = node
         return node
-    
+
+    # Create a node for every folder, even ones with no points/tracks/subfolders
+    # directly in them (get_folder_node is a no-op for folders already created,
+    # since it checks folder_nodes first).
+    for folder_data in folders_list:
+        get_folder_node(folder_data["id"])
+
     # Add points
     for point in data.get("points", []):
         folder_id = point.get("folder_id")
@@ -260,6 +266,34 @@ def select_from_list(stdscr, title: str, subtitle: str, options: list[str]) -> i
     menu.user_input_handlers[27] = cancel  # Esc
 
     return menu.show()
+
+
+def _folder_destination_options(
+    folders: list[dict], excluded: set[str] = frozenset()
+) -> tuple[list[str], list[str | None]]:
+    """Build an indented, name-sorted (options, destination_ids) pair covering the
+    full folder hierarchy (regardless of expand/collapse state), skipping any
+    folder id in `excluded`. Always starts with a "Root (top level)" entry (None).
+    """
+    children_by_parent: dict[str | None, list[dict]] = {}
+    for f in folders:
+        if f["id"] in excluded:
+            continue
+        children_by_parent.setdefault(f.get("parent_id"), []).append(f)
+    for children in children_by_parent.values():
+        children.sort(key=lambda f: f["name"].lower())
+
+    options = ["Root (top level)"]
+    destinations: list[str | None] = [None]
+
+    def walk(parent_id: str | None, depth: int) -> None:
+        for f in children_by_parent.get(parent_id, []):
+            options.append("  " * depth + f["name"])
+            destinations.append(f["id"])
+            walk(f["id"], depth + 1)
+
+    walk(None, 0)
+    return options, destinations
 
 
 class DataViewer:
@@ -468,9 +502,9 @@ class DataViewer:
         # Status bar
         sel_count = len(self.selected_ids)
         if sel_count > 0:
-            status = f" ↑↓:Nav  Space:Select  F2:Rename  F4:Extract  F5:Move  F6:Export  F8:Delete  Enter:Details  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] ({sel_count} sel) "
+            status = f" ↑↓:Nav  Space:Select  F2:Rename  F4:Extract  F5:Move  F6:Export  F7:NewFolder  F8:Delete  Enter:Details  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] ({sel_count} sel) "
         else:
-            status = f" ↑↓:Nav  Space:Select  F2:Rename  F4:Extract  Enter:Details/Toggle  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] "
+            status = f" ↑↓:Nav  Space:Select  F2:Rename  F4:Extract  F7:NewFolder  Enter:Details/Toggle  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] "
         self.stdscr.attron(curses.color_pair(5))
         try:
             self.stdscr.addstr(height - 1, 0, status.ljust(width - 1)[:width-1])
@@ -706,6 +740,40 @@ class DataViewer:
 
         self.show_message(f"Added {new_points} points, {new_tracks} tracks, {new_folders} folders")
 
+    def create_folder_here(self) -> None:
+        """Create a new folder under a chosen destination folder (or root) and reload data."""
+        folders = self.data.get("folders", [])
+        options, destinations = _folder_destination_options(folders)
+
+        choice = select_from_list(self.stdscr, "Create new folder", "Choose where to create it", options)
+        if choice is None:
+            return
+        parent_id = destinations[choice]
+
+        name = prompt_text(self.stdscr, "New folder name")
+        if not name:
+            return
+
+        from tracktools import create_folder
+
+        new_id = create_folder(str(self.data_path), name, parent_id)
+
+        # Reload data
+        self.data = load_data(str(self.data_path))
+        self.points = self.data.get("points", [])
+        self.tracks = self.data.get("tracks", [])
+        self.tree = build_tree(self.data)
+        self.refresh_visible_items()
+
+        # Adjust cursor if needed
+        if self.cursor >= len(self.visible_items):
+            self.cursor = max(0, len(self.visible_items) - 1)
+
+        if new_id:
+            self.show_message(f"Created folder '{name}'")
+        else:
+            self.show_message("⚠️  Could not create folder")
+
     def show_message(self, text: str) -> None:
         """Show a brief message overlay."""
         box_width = len(text) + 4
@@ -873,26 +941,7 @@ class DataViewer:
             if item_id in folder_by_id:
                 mark_folder_and_children(item_id)
 
-        # Build an indented, name-sorted list of valid destination folders,
-        # covering the full hierarchy regardless of expand/collapse state.
-        children_by_parent: dict[str | None, list[dict]] = {}
-        for f in folders:
-            if f["id"] in excluded:
-                continue
-            children_by_parent.setdefault(f.get("parent_id"), []).append(f)
-        for children in children_by_parent.values():
-            children.sort(key=lambda f: f["name"].lower())
-
-        options = ["Root (top level)"]
-        destinations: list[str | None] = [None]
-
-        def walk(parent_id: str | None, depth: int) -> None:
-            for f in children_by_parent.get(parent_id, []):
-                options.append("  " * depth + f["name"])
-                destinations.append(f["id"])
-                walk(f["id"], depth + 1)
-
-        walk(None, 0)
+        options, destinations = _folder_destination_options(folders, excluded)
 
         choice = select_from_list(self.stdscr, "Move selected items", "Choose a destination", options)
         if choice is None:
@@ -1010,6 +1059,9 @@ class DataViewer:
                 elif key == curses.KEY_F4:
                     # Extract more data from a directory into the current file
                     self.extract_more()
+                elif key == curses.KEY_F7:
+                    # Create a new folder next to the item under the cursor
+                    self.create_folder_here()
             else:  # detail mode
                 if key == 27 or key == curses.KEY_BACKSPACE or key == 127:  # Escape or Backspace
                     self.mode = "list"

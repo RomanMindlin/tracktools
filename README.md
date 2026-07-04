@@ -11,6 +11,7 @@ tracktools.py json2kml data.json out.kml [--compress]   # --compress writes a .k
 tracktools.py delete --json-file data.json --ids id1,id2,...
 tracktools.py rename --json-file data.json --id id1 --name "New name"
 tracktools.py move --json-file data.json --ids id1,id2,... (--destination folder_id | --root)
+tracktools.py create-folder --json-file data.json --name "New folder" [--id parent_folder_id]
 ```
 
 - `extract` walks `--input-dir` recursively, parses every `.gpx`/`.kml` file it finds, and writes the result to `--json-file`/`--geojson-file`. Subdirectories become folders in the output; pass `--filenames-folders` to also nest each source file's contents under a folder named after the file. If `--json-file` already exists, its folders/points/tracks are kept and the newly extracted ones are appended (merge) rather than overwriting the file — existing edits (renames, moves, manually added folders) are preserved. Re-running the same directory adds duplicate copies of its points/tracks (they get fresh IDs each time; there's no de-duplication against what's already in the file).
@@ -18,6 +19,7 @@ tracktools.py move --json-file data.json --ids id1,id2,... (--destination folder
 - `delete` removes points/tracks/folders by ID from the JSON file in place (deleting a folder also deletes its contents, recursively).
 - `rename` sets a new `name` for a single point/track/folder by ID.
 - `move` reparents points/tracks/folders to `--destination` (a folder ID) or `--root` (the top level). Moving a folder only changes its own parent; its contents stay nested inside it. Guards against moving a folder into itself or one of its own descendants, and silently skips items already at the destination or an unknown destination ID.
+- `create-folder` adds a new folder named `--name` under `--id` (a parent folder ID), or at the top level if `--id` is omitted. Fails (no write) if `--id` doesn't match an existing folder.
 
 The JSON schema is `{"folders": [...], "points": [...], "tracks": [...]}`; folders nest via `parent_id`, and points/tracks attach to a folder via `folder_id`. `export_selected_gpx`/`export_selected_kml` (used by `trackview.py`'s export feature) export a subset of items by ID rather than the whole file.
 
@@ -68,6 +70,13 @@ Pull in a newly-added batch of GPX/KML files without losing what's already in `d
 tracktools.py extract --input-dir ./new-trip --json-file data.json --filenames-folders
 ```
 
+Create a new top-level folder, then a subfolder inside it:
+
+```
+tracktools.py create-folder --json-file data.json --name "2025 Trips"
+tracktools.py create-folder --json-file data.json --name "July" --id 5e1c2a9f0d3b4c71
+```
+
 ## trackview.py
 
 A terminal (curses) UI for browsing a `tracktools.py` JSON data file — a tree view of folders/points/tracks with details, multi-select, export, and delete.
@@ -87,6 +96,7 @@ Keys:
 - `F4` — extract more data: prompts for a directory and merges its GPX/KML files into the current JSON file
 - `F5` — move the current selection to a chosen destination folder (or the top level), writing changes back to the JSON file
 - `F6` — export the current selection to GPX/KML/KMZ (prompts for format and filename)
+- `F7` — create a new folder: prompts you to pick a destination folder (or the top level) from the same kind of picker `F5` uses, then asks for a name
 - `F8` — delete the current selection (with confirmation), writing changes back to the JSON file
 - `Esc`/`Backspace` — back out of detail view
 - `q` — quit
