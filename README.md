@@ -9,11 +9,13 @@ tracktools.py extract --input-dir ./tracks --json-file data.json [--geojson-file
 tracktools.py json2gpx data.json out.gpx
 tracktools.py json2kml data.json out.kml [--compress]   # --compress writes a .kmz
 tracktools.py delete --json-file data.json --ids id1,id2,...
+tracktools.py rename --json-file data.json --id id1 --name "New name"
 ```
 
 - `extract` walks `--input-dir` recursively, parses every `.gpx`/`.kml` file it finds, and writes the merged result to `--json-file`/`--geojson-file`. Subdirectories become folders in the output; pass `--filenames-folders` to also nest each source file's contents under a folder named after the file.
 - `json2gpx` / `json2kml` regenerate a GPX or KML(Z) file from the JSON data (used e.g. to re-import into Google Earth or a GPS device).
 - `delete` removes points/tracks/folders by ID from the JSON file in place (deleting a folder also deletes its contents, recursively).
+- `rename` sets a new `name` for a single point/track/folder by ID.
 
 The JSON schema is `{"folders": [...], "points": [...], "tracks": [...]}`; folders nest via `parent_id`, and points/tracks attach to a folder via `folder_id`. `export_selected_gpx`/`export_selected_kml` (used by `trackview.py`'s export feature) export a subset of items by ID rather than the whole file.
 
@@ -45,6 +47,12 @@ Remove a couple of stray waypoints and a whole folder (and everything nested in 
 tracktools.py delete --json-file data.json --ids 97a6575c46a9ac00,169aedef048377b1
 ```
 
+Rename a point by ID:
+
+```
+tracktools.py rename --json-file data.json --id 97a6575c46a9ac00 --name "Trailhead"
+```
+
 ## trackview.py
 
 A terminal (curses) UI for browsing a `tracktools.py` JSON data file — a tree view of folders/points/tracks with details, multi-select, export, and delete.
@@ -60,6 +68,7 @@ Keys:
 - `←/→` — collapse/expand a folder
 - `Enter` — expand/collapse a folder, or open detail view for a point/track
 - `Space` — toggle multi-selection (selecting a folder implicitly selects its contents)
+- `F2` — rename the item under the cursor (prompts for a new name), writing changes back to the JSON file
 - `F6` — export the current selection to GPX/KML/KMZ (prompts for format and filename)
 - `F8` — delete the current selection (with confirmation), writing changes back to the JSON file
 - `Esc`/`Backspace` — back out of detail view

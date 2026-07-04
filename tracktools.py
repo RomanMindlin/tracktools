@@ -739,8 +739,24 @@ def delete_items(json_file: str, ids: list[str]) -> int:
     
     with open(json_file, "w", encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    
+
     return deleted
+
+
+def rename_item(json_file: str, item_id: str, new_name: str) -> bool:
+    """Rename a folder, point, or track by ID. Returns True if the item was found and renamed."""
+    with open(json_file, "r", encoding='utf-8') as f:
+        data: dict[str, Any] = json.load(f)
+
+    for collection in ("folders", "points", "tracks"):
+        for item in data.get(collection, []):
+            if item["id"] == item_id:
+                item["name"] = new_name
+                with open(json_file, "w", encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                return True
+
+    return False
 
 
 def _collect_items_by_ids(data: dict[str, Any], ids: list[str]) -> tuple[list, list, set[str]]:
@@ -1180,6 +1196,11 @@ def main() -> None:
     delete_parser.add_argument("--json-file", type=str, required=True, help="JSON data file")
     delete_parser.add_argument("--ids", type=str, required=True, help="Comma-separated list of IDs to delete")
 
+    rename_parser = subparsers.add_parser("rename", help="Rename an item by ID")
+    rename_parser.add_argument("--json-file", type=str, required=True, help="JSON data file")
+    rename_parser.add_argument("--id", type=str, required=True, help="ID of the item to rename")
+    rename_parser.add_argument("--name", type=str, required=True, help="New name for the item")
+
     args = parser.parse_args()
 
     if args.command == "extract":
@@ -1205,6 +1226,15 @@ def main() -> None:
             return
         deleted = delete_items(args.json_file, ids)
         print(f"✅ Deleted {deleted} items")
+    elif args.command == "rename":
+        new_name = args.name.strip()
+        if not new_name:
+            print("⚠️  --name cannot be empty")
+            return
+        if rename_item(args.json_file, args.id, new_name):
+            print(f"✅ Renamed item to '{new_name}'")
+        else:
+            print(f"⚠️  No item found with ID {args.id}")
     else:
         parser.print_help()
 

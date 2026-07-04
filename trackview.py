@@ -328,9 +328,9 @@ class DataViewer:
         # Status bar
         sel_count = len(self.selected_ids)
         if sel_count > 0:
-            status = f" ↑↓:Nav  Space:Select  F6:Export  F8:Delete  Enter:Details  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] ({sel_count} sel) "
+            status = f" ↑↓:Nav  Space:Select  F2:Rename  F6:Export  F8:Delete  Enter:Details  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] ({sel_count} sel) "
         else:
-            status = f" ↑↓:Nav  Space:Select  Enter:Details/Toggle  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] "
+            status = f" ↑↓:Nav  Space:Select  F2:Rename  Enter:Details/Toggle  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] "
         self.stdscr.attron(curses.color_pair(5))
         try:
             self.stdscr.addstr(height - 1, 0, status.ljust(width - 1)[:width-1])
@@ -531,6 +531,84 @@ class DataViewer:
         
         # Show result
         self.show_message(f"Deleted {deleted} items")
+
+    def prompt_rename(self, current_name: str) -> str | None:
+        """Prompt user for a new name. Returns the new name, or None if cancelled/invalid."""
+        height, width = self.stdscr.getmaxyx()
+
+        prompt = f"Rename '{current_name}' to: "
+        box_width = max(50, len(prompt) + 10)
+        box_height = 4
+
+        start_x = max(0, (width - box_width) // 2)
+        start_y = max(0, (height - box_height) // 2)
+
+        # Draw box
+        try:
+            self.stdscr.addstr(start_y, start_x, "┌" + "─" * (box_width - 2) + "┐")
+            for i in range(box_height - 2):
+                self.stdscr.addstr(start_y + 1 + i, start_x, "│" + " " * (box_width - 2) + "│")
+            self.stdscr.addstr(start_y + box_height - 1, start_x, "└" + "─" * (box_width - 2) + "┘")
+            self.stdscr.addstr(start_y + 1, start_x + 2, prompt)
+        except curses.error:
+            pass
+
+        self.stdscr.refresh()
+        curses.flushinp()  # Clear any buffered input
+        self.stdscr.timeout(-1)  # Disable timeout for blocking input
+        curses.curs_set(1)  # Show cursor
+        curses.echo()
+
+        try:
+            input_win_x = start_x + 2 + len(prompt)
+            self.stdscr.move(start_y + 1, input_win_x)
+            user_input = self.stdscr.getstr(start_y + 1, input_win_x, box_width - len(prompt) - 4)
+            new_name = user_input.decode('utf-8').strip()
+        except curses.error:
+            new_name = ""
+        finally:
+            curses.noecho()
+            curses.curs_set(0)
+            self.stdscr.timeout(100)  # Restore normal timeout
+
+        if not new_name:
+            self.show_message("⚠️  Name cannot be empty")
+            return None
+
+        return new_name
+
+    def rename_current(self) -> None:
+        """Rename the item under the cursor and reload data."""
+        if not self.visible_items:
+            return
+
+        node, _ = self.visible_items[self.cursor]
+        if not node.id:
+            return
+
+        new_name = self.prompt_rename(node.name)
+        if not new_name:
+            return
+
+        from tracktools import rename_item
+
+        renamed = rename_item(str(self.data_path), node.id, new_name)
+
+        # Reload data
+        self.data = load_data(str(self.data_path))
+        self.points = self.data.get("points", [])
+        self.tracks = self.data.get("tracks", [])
+        self.tree = build_tree(self.data)
+        self.refresh_visible_items()
+
+        # Adjust cursor if needed
+        if self.cursor >= len(self.visible_items):
+            self.cursor = max(0, len(self.visible_items) - 1)
+
+        if renamed:
+            self.show_message(f"Renamed to '{new_name}'")
+        else:
+            self.show_message("⚠️  Item not found")
 
     def show_message(self, text: str) -> None:
         """Show a brief message overlay."""
@@ -858,6 +936,9 @@ class DataViewer:
                     # Export selected items
                     if self.selected_ids:
                         self.export_selected()
+                elif key == curses.KEY_F2:
+                    # Rename item under cursor
+                    self.rename_current()
             else:  # detail mode
                 if key == 27 or key == curses.KEY_BACKSPACE or key == 127:  # Escape or Backspace
                     self.mode = "list"
