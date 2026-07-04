@@ -641,6 +641,13 @@ class DataViewer:
         result_index, organized = menu_result
         fmt, _ = formats[result_index]
         compress = fmt == "kmz"
+
+        if organized:
+            folder_name = self.prompt_foldername("export")
+            if not folder_name:
+                return None
+            return (fmt, folder_name, compress, organized)
+
         default_name = f"export.{fmt}"
         result = self.prompt_filename(fmt, default_name)
         if not result:
@@ -688,12 +695,56 @@ class DataViewer:
         
         if not filename:
             return None
-        
+
         # Ensure correct extension
         if not filename.endswith(f".{fmt}"):
             filename = f"{filename}.{fmt}"
-        
+
         return (fmt, filename)
+
+    def prompt_foldername(self, default: str) -> str | None:
+        """Prompt user for an output folder name. Returns the folder name/path or None."""
+        height, width = self.stdscr.getmaxyx()
+
+        prompt = f"Folder name [{default}]: "
+        box_width = max(50, len(prompt) + 10)
+        box_height = 4
+
+        start_x = max(0, (width - box_width) // 2)
+        start_y = max(0, (height - box_height) // 2)
+
+        # Draw box
+        try:
+            self.stdscr.addstr(start_y, start_x, "┌" + "─" * (box_width - 2) + "┐")
+            for i in range(box_height - 2):
+                self.stdscr.addstr(start_y + 1 + i, start_x, "│" + " " * (box_width - 2) + "│")
+            self.stdscr.addstr(start_y + box_height - 1, start_x, "└" + "─" * (box_width - 2) + "┘")
+            self.stdscr.addstr(start_y + 1, start_x + 2, prompt)
+        except curses.error:
+            pass
+
+        self.stdscr.refresh()
+        curses.flushinp()  # Clear any buffered input
+        self.stdscr.timeout(-1)  # Disable timeout for blocking input
+        curses.curs_set(1)  # Show cursor
+        curses.echo()
+
+        try:
+            input_win_x = start_x + 2 + len(prompt)
+            self.stdscr.move(start_y + 1, input_win_x)
+            user_input = self.stdscr.getstr(start_y + 1, input_win_x, box_width - len(prompt) - 4)
+            folder_name = user_input.decode('utf-8').strip() or default
+        except curses.error:
+            folder_name = default
+        finally:
+            curses.noecho()
+            curses.curs_set(0)
+            self.stdscr.timeout(100)  # Restore normal timeout
+
+        if not folder_name:
+            return None
+
+        return folder_name
 
     def export_selected(self) -> None:
         """Export selected items to GPX or KML/KMZ."""
@@ -701,17 +752,28 @@ class DataViewer:
         if not result:
             return
 
-        fmt, filename, compress, organized = result
+        fmt, path, compress, organized = result
         ids_to_export = list(self.selected_ids)
 
-        from tracktools import export_selected_gpx, export_selected_kml
+        from tracktools import (
+            export_selected_gpx,
+            export_selected_gpx_organized,
+            export_selected_kml,
+            export_selected_kml_organized,
+        )
 
         if fmt == "gpx":
-            count = export_selected_gpx(str(self.data_path), filename, ids_to_export)
+            if organized:
+                count = export_selected_gpx_organized(str(self.data_path), path, ids_to_export)
+            else:
+                count = export_selected_gpx(str(self.data_path), path, ids_to_export)
         else:
-            count = export_selected_kml(str(self.data_path), filename, ids_to_export, compress, organized)
+            if organized:
+                count = export_selected_kml_organized(str(self.data_path), path, ids_to_export, compress)
+            else:
+                count = export_selected_kml(str(self.data_path), path, ids_to_export, compress, organize=False)
 
-        self.show_message(f"Exported {count} items to {filename}")
+        self.show_message(f"Exported {count} items to {path}")
 
     def run(self):
         """Main event loop."""

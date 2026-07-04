@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import argparse
@@ -422,6 +423,93 @@ def json_to_gpx(json_file: str, output_file: str) -> None:
     print(f"✅ GPX saved to {output_file}")
 
 
+def _safe_folder_name(name: str) -> str:
+    """Make a folder name safe for use as a filesystem path component."""
+    cleaned = re.sub(r'[<>:"/\\|?*]', "_", name).strip()
+    return cleaned or "untitled"
+
+
+def json_to_gpx_organized(json_file: str, output_dir: str) -> None:
+    """Export JSON data as a tree of GPX files mirroring the data's folder structure.
+
+    Creates output_dir plus one subfolder per folder in the data (nested to match
+    parent_id relationships), and writes an export.gpx file in each folder that has
+    points or tracks directly assigned to it.
+    """
+    with open(json_file, "r", encoding='utf-8') as f:
+        data: dict[str, Any] = json.load(f)
+
+    folder_by_id: dict[str, dict] = {f["id"]: f for f in data.get("folders", [])}
+
+    points_by_folder: dict[str | None, list] = defaultdict(list)
+    for point in data.get("points", []):
+        points_by_folder[point.get("folder_id")].append(point)
+
+    tracks_by_folder: dict[str | None, list] = defaultdict(list)
+    for track in data.get("tracks", []):
+        tracks_by_folder[track.get("folder_id")].append(track)
+
+    dir_by_folder_id: dict[str | None, str] = {None: output_dir}
+
+    def dir_for_folder(folder_id: str | None) -> str:
+        if folder_id in dir_by_folder_id:
+            return dir_by_folder_id[folder_id]
+        folder_data = folder_by_id[folder_id]
+        parent_dir = dir_for_folder(folder_data.get("parent_id"))
+        folder_dir = os.path.join(parent_dir, _safe_folder_name(folder_data["name"]))
+        dir_by_folder_id[folder_id] = folder_dir
+        return folder_dir
+
+    def write_gpx(folder_id: str | None) -> int:
+        points = points_by_folder.get(folder_id, [])
+        tracks = tracks_by_folder.get(folder_id, [])
+        if not points and not tracks:
+            return 0
+
+        gpx = gpxpy.gpx.GPX()
+        for point in points:
+            wp = gpxpy.gpx.GPXWaypoint(
+                latitude=point["latitude"],
+                longitude=point["longitude"],
+                name=point["name"],
+                type=point.get("icon")
+            )
+            if point.get("time"):
+                wp.time = datetime.fromisoformat(point["time"])
+            gpx.waypoints.append(wp)
+
+        for track in tracks:
+            gpx_track = gpxpy.gpx.GPXTrack(name=track["name"])
+            segment = gpxpy.gpx.GPXTrackSegment()
+            for pt in track["points"]:
+                gpx_pt = gpxpy.gpx.GPXTrackPoint(
+                    latitude=pt["latitude"],
+                    longitude=pt["longitude"]
+                )
+                if pt.get("time"):
+                    gpx_pt.time = datetime.fromisoformat(pt["time"])
+                segment.points.append(gpx_pt)
+            gpx_track.segments.append(segment)
+            gpx.tracks.append(gpx_track)
+
+        folder_dir = dir_for_folder(folder_id)
+        os.makedirs(folder_dir, exist_ok=True)
+        with open(os.path.join(folder_dir, "export.gpx"), "w", encoding='utf-8') as f:
+            f.write(gpx.to_xml())
+        return len(points) + len(tracks)
+
+    os.makedirs(output_dir, exist_ok=True)
+    for folder_id in folder_by_id:
+        os.makedirs(dir_for_folder(folder_id), exist_ok=True)
+
+    files_written = 0
+    files_written += 1 if write_gpx(None) else 0
+    for folder_id in folder_by_id:
+        files_written += 1 if write_gpx(folder_id) else 0
+
+    print(f"✅ Organized GPX export saved to {output_dir} ({files_written} export.gpx files)")
+
+
 def json_to_kml(json_file: str, output_file: str, compress: bool = False) -> None:
     with open(json_file, "r", encoding='utf-8') as f:
         data: dict[str, Any] = json.load(f)
@@ -489,6 +577,99 @@ def json_to_kml(json_file: str, output_file: str, compress: bool = False) -> Non
         with open(output_file, "w", encoding='utf-8') as f:
             f.write(kml_content)
         print(f"✅ KML saved to {output_file}")
+
+
+def json_to_kml_organized(json_file: str, output_dir: str, compress: bool = False) -> None:
+    """Export JSON data as a tree of KML/KMZ files mirroring the data's folder structure.
+
+    Creates output_dir plus one subfolder per folder in the data (nested to match
+    parent_id relationships), and writes an export.kml/export.kmz file in each folder
+    that has points or tracks directly assigned to it.
+    """
+    with open(json_file, "r", encoding='utf-8') as f:
+        data: dict[str, Any] = json.load(f)
+
+    folder_by_id: dict[str, dict] = {f["id"]: f for f in data.get("folders", [])}
+
+    points_by_folder: dict[str | None, list] = defaultdict(list)
+    for point in data.get("points", []):
+        points_by_folder[point.get("folder_id")].append(point)
+
+    tracks_by_folder: dict[str | None, list] = defaultdict(list)
+    for track in data.get("tracks", []):
+        tracks_by_folder[track.get("folder_id")].append(track)
+
+    dir_by_folder_id: dict[str | None, str] = {None: output_dir}
+
+    def dir_for_folder(folder_id: str | None) -> str:
+        if folder_id in dir_by_folder_id:
+            return dir_by_folder_id[folder_id]
+        folder_data = folder_by_id[folder_id]
+        parent_dir = dir_for_folder(folder_data.get("parent_id"))
+        folder_dir = os.path.join(parent_dir, _safe_folder_name(folder_data["name"]))
+        dir_by_folder_id[folder_id] = folder_dir
+        return folder_dir
+
+    def write_kml(folder_id: str | None) -> int:
+        folder_points = points_by_folder.get(folder_id, [])
+        folder_tracks = tracks_by_folder.get(folder_id, [])
+        if not folder_points and not folder_tracks:
+            return 0
+
+        k = kml.KML()
+        doc = kml.Document()
+        k.append(doc)
+
+        for point in folder_points:
+            icon = point.get("icon")
+            placemark = Placemark(
+                name=point["name"],
+                style_url=StyleUrl(url=icon) if icon else None,
+                times=_kml_times_for_point(point),
+                kml_geometry=kml_geometry.Point(
+                    geometry=Point(point["longitude"], point["latitude"])
+                ),
+            )
+            doc.features.append(placemark)
+
+        exported_tracks = 0
+        for track in folder_tracks:
+            track_geometry = _track_kml_geometry(track)
+            if track_geometry is None:
+                continue
+            placemark = Placemark(
+                name=track["name"],
+                times=_kml_times_for_track(track),
+                kml_geometry=track_geometry,
+            )
+            doc.features.append(placemark)
+            exported_tracks += 1
+
+        folder_dir = dir_for_folder(folder_id)
+        os.makedirs(folder_dir, exist_ok=True)
+        kml_content = k.to_string()
+        if compress:
+            output_path = os.path.join(folder_dir, "export.kmz")
+            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr('doc.kml', kml_content)
+        else:
+            output_path = os.path.join(folder_dir, "export.kml")
+            with open(output_path, "w", encoding='utf-8') as f:
+                f.write(kml_content)
+
+        return len(folder_points) + exported_tracks
+
+    os.makedirs(output_dir, exist_ok=True)
+    for folder_id in folder_by_id:
+        os.makedirs(dir_for_folder(folder_id), exist_ok=True)
+
+    ext = "kmz" if compress else "kml"
+    files_written = 0
+    files_written += 1 if write_kml(None) else 0
+    for folder_id in folder_by_id:
+        files_written += 1 if write_kml(folder_id) else 0
+
+    print(f"✅ Organized {ext.upper()} export saved to {output_dir} ({files_written} export.{ext} files)")
 
 
 def delete_items(json_file: str, ids: list[str]) -> int:
@@ -614,8 +795,95 @@ def export_selected_gpx(json_file: str, output_file: str, ids: list[str]) -> int
     
     with open(output_file, "w", encoding='utf-8') as f:
         f.write(gpx.to_xml())
-    
+
     return len(points) + len(tracks)
+
+
+def export_selected_gpx_organized(json_file: str, output_dir: str, ids: list[str]) -> int:
+    """Export selected items as a tree of GPX files mirroring folder structure. Returns count of exported items."""
+    with open(json_file, "r", encoding='utf-8') as f:
+        data: dict[str, Any] = json.load(f)
+
+    points, tracks, used_folder_ids = _collect_items_by_ids(data, ids)
+
+    folder_by_id: dict[str, dict] = {f["id"]: f for f in data.get("folders", [])}
+
+    def add_folder_ancestry(folder_id: str) -> None:
+        if folder_id in used_folder_ids:
+            return
+        used_folder_ids.add(folder_id)
+        folder = folder_by_id.get(folder_id)
+        if folder and folder.get("parent_id"):
+            add_folder_ancestry(folder["parent_id"])
+
+    for fid in list(used_folder_ids):
+        folder = folder_by_id.get(fid)
+        if folder and folder.get("parent_id"):
+            add_folder_ancestry(folder["parent_id"])
+
+    points_by_folder: dict[str | None, list] = defaultdict(list)
+    for point in points:
+        points_by_folder[point.get("folder_id")].append(point)
+
+    tracks_by_folder: dict[str | None, list] = defaultdict(list)
+    for track in tracks:
+        tracks_by_folder[track.get("folder_id")].append(track)
+
+    dir_by_folder_id: dict[str | None, str] = {None: output_dir}
+
+    def dir_for_folder(folder_id: str | None) -> str:
+        if folder_id in dir_by_folder_id:
+            return dir_by_folder_id[folder_id]
+        folder_data = folder_by_id[folder_id]
+        parent_dir = dir_for_folder(folder_data.get("parent_id"))
+        folder_dir = os.path.join(parent_dir, _safe_folder_name(folder_data["name"]))
+        dir_by_folder_id[folder_id] = folder_dir
+        return folder_dir
+
+    def write_gpx(folder_id: str | None) -> int:
+        folder_points = points_by_folder.get(folder_id, [])
+        folder_tracks = tracks_by_folder.get(folder_id, [])
+        if not folder_points and not folder_tracks:
+            return 0
+
+        gpx = gpxpy.gpx.GPX()
+        for point in folder_points:
+            wp = gpxpy.gpx.GPXWaypoint(
+                latitude=point["latitude"],
+                longitude=point["longitude"],
+                name=point["name"],
+                type=point.get("icon")
+            )
+            if point.get("time"):
+                wp.time = datetime.fromisoformat(point["time"])
+            gpx.waypoints.append(wp)
+
+        for track in folder_tracks:
+            gpx_track = gpxpy.gpx.GPXTrack(name=track["name"])
+            segment = gpxpy.gpx.GPXTrackSegment()
+            for pt in track["points"]:
+                gpx_pt = gpxpy.gpx.GPXTrackPoint(
+                    latitude=pt["latitude"],
+                    longitude=pt["longitude"]
+                )
+                if pt.get("time"):
+                    gpx_pt.time = datetime.fromisoformat(pt["time"])
+                segment.points.append(gpx_pt)
+            gpx_track.segments.append(segment)
+            gpx.tracks.append(gpx_track)
+
+        folder_dir = dir_for_folder(folder_id)
+        os.makedirs(folder_dir, exist_ok=True)
+        with open(os.path.join(folder_dir, "export.gpx"), "w", encoding='utf-8') as f:
+            f.write(gpx.to_xml())
+        return len(folder_points) + len(folder_tracks)
+
+    os.makedirs(output_dir, exist_ok=True)
+    total = write_gpx(None)
+    for folder_id in used_folder_ids:
+        total += write_gpx(folder_id)
+
+    return total
 
 
 def export_selected_kml(json_file: str, output_file: str, ids: list[str], compress: bool = False, organize: bool = True) -> int:
@@ -704,8 +972,104 @@ def export_selected_kml(json_file: str, output_file: str, ids: list[str], compre
     else:
         with open(output_file, "w", encoding='utf-8') as f:
             f.write(kml_content)
-    
+
     return len(points) + exported_tracks
+
+
+def export_selected_kml_organized(json_file: str, output_dir: str, ids: list[str], compress: bool = False) -> int:
+    """Export selected items as a tree of KML/KMZ files mirroring folder structure. Returns count of exported items."""
+    with open(json_file, "r", encoding='utf-8') as f:
+        data: dict[str, Any] = json.load(f)
+
+    points, tracks, used_folder_ids = _collect_items_by_ids(data, ids)
+
+    folder_by_id: dict[str, dict] = {f["id"]: f for f in data.get("folders", [])}
+
+    def add_folder_ancestry(folder_id: str) -> None:
+        if folder_id in used_folder_ids:
+            return
+        used_folder_ids.add(folder_id)
+        folder = folder_by_id.get(folder_id)
+        if folder and folder.get("parent_id"):
+            add_folder_ancestry(folder["parent_id"])
+
+    for fid in list(used_folder_ids):
+        folder = folder_by_id.get(fid)
+        if folder and folder.get("parent_id"):
+            add_folder_ancestry(folder["parent_id"])
+
+    points_by_folder: dict[str | None, list] = defaultdict(list)
+    for point in points:
+        points_by_folder[point.get("folder_id")].append(point)
+
+    tracks_by_folder: dict[str | None, list] = defaultdict(list)
+    for track in tracks:
+        tracks_by_folder[track.get("folder_id")].append(track)
+
+    dir_by_folder_id: dict[str | None, str] = {None: output_dir}
+
+    def dir_for_folder(folder_id: str | None) -> str:
+        if folder_id in dir_by_folder_id:
+            return dir_by_folder_id[folder_id]
+        folder_data = folder_by_id[folder_id]
+        parent_dir = dir_for_folder(folder_data.get("parent_id"))
+        folder_dir = os.path.join(parent_dir, _safe_folder_name(folder_data["name"]))
+        dir_by_folder_id[folder_id] = folder_dir
+        return folder_dir
+
+    def write_kml(folder_id: str | None) -> int:
+        folder_points = points_by_folder.get(folder_id, [])
+        folder_tracks = tracks_by_folder.get(folder_id, [])
+        if not folder_points and not folder_tracks:
+            return 0
+
+        k = kml.KML()
+        doc = kml.Document()
+        k.append(doc)
+
+        for point in folder_points:
+            icon = point.get("icon")
+            placemark = Placemark(
+                name=point["name"],
+                style_url=StyleUrl(url=icon) if icon else None,
+                times=_kml_times_for_point(point),
+                kml_geometry=kml_geometry.Point(
+                    geometry=Point(point["longitude"], point["latitude"])
+                ),
+            )
+            doc.features.append(placemark)
+
+        exported_tracks = 0
+        for track in folder_tracks:
+            track_geometry = _track_kml_geometry(track)
+            if track_geometry is None:
+                continue
+            placemark = Placemark(
+                name=track["name"],
+                times=_kml_times_for_track(track),
+                kml_geometry=track_geometry,
+            )
+            doc.features.append(placemark)
+            exported_tracks += 1
+
+        folder_dir = dir_for_folder(folder_id)
+        os.makedirs(folder_dir, exist_ok=True)
+        kml_content = k.to_string()
+        if compress:
+            with zipfile.ZipFile(os.path.join(folder_dir, "export.kmz"), 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr('doc.kml', kml_content)
+        else:
+            with open(os.path.join(folder_dir, "export.kml"), "w", encoding='utf-8') as f:
+                f.write(kml_content)
+
+        return len(folder_points) + exported_tracks
+
+    os.makedirs(output_dir, exist_ok=True)
+    total = write_kml(None)
+    for folder_id in used_folder_ids:
+        total += write_kml(folder_id)
+
+    return total
 
 
 def main() -> None:
@@ -724,12 +1088,14 @@ def main() -> None:
 
     gpx_parser = subparsers.add_parser("json2gpx", help="Convert JSON data to GPX")
     gpx_parser.add_argument("json_file", type=str, help="Input JSON file")
-    gpx_parser.add_argument("output_file", type=str, help="Output GPX file")
+    gpx_parser.add_argument("output_file", type=str, help="Output GPX file, or output folder if --organized is set")
+    gpx_parser.add_argument("--organized", action="store_true", help="Export a folder tree mirroring the data's folder structure, with one export.gpx per folder")
 
     kml_parser = subparsers.add_parser("json2kml", help="Convert JSON data to KML")
     kml_parser.add_argument("json_file", type=str, help="Input JSON file")
-    kml_parser.add_argument("output_file", type=str, help="Output KML/KMZ file")
+    kml_parser.add_argument("output_file", type=str, help="Output KML/KMZ file, or output folder if --organized is set")
     kml_parser.add_argument("--compress", action="store_true", help="Create KMZ file instead of KML")
+    kml_parser.add_argument("--organized", action="store_true", help="Export a folder tree mirroring the data's folder structure, with one export.kml/export.kmz per folder")
 
     delete_parser = subparsers.add_parser("delete", help="Delete items by ID")
     delete_parser.add_argument("--json-file", type=str, required=True, help="JSON data file")
@@ -744,9 +1110,15 @@ def main() -> None:
 
         extract_data(args.input_dir, args.json_file, args.geojson_file, args.filenames_folders)
     elif args.command == "json2gpx":
-        json_to_gpx(args.json_file, args.output_file)
+        if args.organized:
+            json_to_gpx_organized(args.json_file, args.output_file)
+        else:
+            json_to_gpx(args.json_file, args.output_file)
     elif args.command == "json2kml":
-        json_to_kml(args.json_file, args.output_file, args.compress)
+        if args.organized:
+            json_to_kml_organized(args.json_file, args.output_file, args.compress)
+        else:
+            json_to_kml(args.json_file, args.output_file, args.compress)
     elif args.command == "delete":
         ids = [id.strip() for id in args.ids.split(",") if id.strip()]
         if not ids:
