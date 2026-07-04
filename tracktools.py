@@ -529,7 +529,7 @@ def json_to_kml(json_file: str, output_file: str, compress: bool = False) -> Non
         data: dict[str, Any] = json.load(f)
 
     k = kml.KML()
-    doc = kml.Document()
+    doc = kml.Document(name=os.path.splitext(os.path.basename(output_file))[0])
     k.append(doc)
 
     kml_folders: dict[str, Folder] = {}
@@ -629,12 +629,12 @@ def json_to_kml_organized(json_file: str, output_dir: str, compress: bool = Fals
         dir_by_folder_id[folder_id] = folder_dir
         return folder_dir
 
-    def write_kml(output_path: str, points: list, tracks: list) -> int:
+    def write_kml(output_path: str, title: str, points: list, tracks: list) -> int:
         if not points and not tracks:
             return 0
 
         k = kml.KML()
-        doc = kml.Document()
+        doc = kml.Document(name=title)
         k.append(doc)
 
         for point in points:
@@ -679,6 +679,7 @@ def json_to_kml_organized(json_file: str, output_dir: str, compress: bool = Fals
     files_written = 0
     files_written += 1 if write_kml(
         os.path.join(output_dir, f"export.{ext}"),
+        os.path.basename(os.path.normpath(output_dir)),
         points_by_folder.get(None, []),
         tracks_by_folder.get(None, []),
     ) else 0
@@ -691,6 +692,7 @@ def json_to_kml_organized(json_file: str, output_dir: str, compress: bool = Fals
             output_path = os.path.join(parent_dir, f"{_safe_folder_name(folder_data['name'])}.{ext}")
         files_written += 1 if write_kml(
             output_path,
+            folder_data["name"],
             points_by_folder.get(folder_id, []),
             tracks_by_folder.get(folder_id, []),
         ) else 0
@@ -965,7 +967,7 @@ def export_selected_kml(json_file: str, output_file: str, ids: list[str], compre
     folder_by_id: dict[str, dict] = {f["id"]: f for f in folders_data}
 
     k = kml.KML()
-    doc = kml.Document()
+    doc = kml.Document(name=os.path.splitext(os.path.basename(output_file))[0])
     k.append(doc)
 
     if not organize:
@@ -1098,12 +1100,12 @@ def export_selected_kml_organized(json_file: str, output_dir: str, ids: list[str
         dir_by_folder_id[folder_id] = folder_dir
         return folder_dir
 
-    def write_kml(output_path: str, points: list, tracks: list) -> int:
+    def write_kml(output_path: str, title: str, points: list, tracks: list) -> int:
         if not points and not tracks:
             return 0
 
         k = kml.KML()
-        doc = kml.Document()
+        doc = kml.Document(name=title)
         k.append(doc)
 
         for point in points:
@@ -1147,6 +1149,7 @@ def export_selected_kml_organized(json_file: str, output_dir: str, ids: list[str
 
     total = write_kml(
         os.path.join(output_dir, f"export.{ext}"),
+        os.path.basename(os.path.normpath(output_dir)),
         points_by_folder.get(None, []),
         tracks_by_folder.get(None, []),
     )
@@ -1160,6 +1163,7 @@ def export_selected_kml_organized(json_file: str, output_dir: str, ids: list[str
             output_path = os.path.join(parent_dir, f"{_safe_folder_name(folder_data['name'])}.{ext}")
         total += write_kml(
             output_path,
+            folder_data["name"],
             points_by_folder.get(folder_id, []),
             tracks_by_folder.get(folder_id, []),
         )
