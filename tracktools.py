@@ -618,52 +618,56 @@ def export_selected_gpx(json_file: str, output_file: str, ids: list[str]) -> int
     return len(points) + len(tracks)
 
 
-def export_selected_kml(json_file: str, output_file: str, ids: list[str], compress: bool = False) -> int:
-    """Export selected items to KML/KMZ with folder structure. Returns count of exported items."""
+def export_selected_kml(json_file: str, output_file: str, ids: list[str], compress: bool = False, organize: bool = True) -> int:
+    """Export selected items to KML/KMZ, optionally nested into folder structure. Returns count of exported items."""
     with open(json_file, "r", encoding='utf-8') as f:
         data: dict[str, Any] = json.load(f)
-    
+
     points, tracks, used_folder_ids = _collect_items_by_ids(data, ids)
-    
+
     folders_data = data.get("folders", [])
     folder_by_id: dict[str, dict] = {f["id"]: f for f in folders_data}
-    
-    def add_folder_ancestry(folder_id: str) -> None:
-        if folder_id in used_folder_ids:
-            return
-        used_folder_ids.add(folder_id)
-        folder = folder_by_id.get(folder_id)
-        if folder and folder.get("parent_id"):
-            add_folder_ancestry(folder["parent_id"])
-    
-    for fid in list(used_folder_ids):
-        folder = folder_by_id.get(fid)
-        if folder and folder.get("parent_id"):
-            add_folder_ancestry(folder["parent_id"])
-    
+
     k = kml.KML()
     doc = kml.Document()
     k.append(doc)
-    
-    kml_folders: dict[str, Folder] = {}
-    
-    def get_kml_folder(folder_id: str | None) -> Document | Folder:
-        if not folder_id:
+
+    if not organize:
+        def get_kml_folder(folder_id: str | None) -> Document | Folder:
             return doc
-        if folder_id in kml_folders:
-            return kml_folders[folder_id]
-        
-        folder_data = folder_by_id.get(folder_id)
-        if not folder_data or folder_id not in used_folder_ids:
-            return doc
-        
-        parent_id = folder_data.get("parent_id")
-        parent = get_kml_folder(parent_id)
-        
-        new_folder = Folder(name=folder_data["name"])
-        parent.features.append(new_folder)
-        kml_folders[folder_id] = new_folder
-        return new_folder
+    else:
+        def add_folder_ancestry(folder_id: str) -> None:
+            if folder_id in used_folder_ids:
+                return
+            used_folder_ids.add(folder_id)
+            folder = folder_by_id.get(folder_id)
+            if folder and folder.get("parent_id"):
+                add_folder_ancestry(folder["parent_id"])
+
+        for fid in list(used_folder_ids):
+            folder = folder_by_id.get(fid)
+            if folder and folder.get("parent_id"):
+                add_folder_ancestry(folder["parent_id"])
+
+        kml_folders: dict[str, Folder] = {}
+
+        def get_kml_folder(folder_id: str | None) -> Document | Folder:
+            if not folder_id:
+                return doc
+            if folder_id in kml_folders:
+                return kml_folders[folder_id]
+
+            folder_data = folder_by_id.get(folder_id)
+            if not folder_data or folder_id not in used_folder_ids:
+                return doc
+
+            parent_id = folder_data.get("parent_id")
+            parent = get_kml_folder(parent_id)
+
+            new_folder = Folder(name=folder_data["name"])
+            parent.features.append(new_folder)
+            kml_folders[folder_id] = new_folder
+            return new_folder
     
     for point in points:
         icon = point.get("icon")
