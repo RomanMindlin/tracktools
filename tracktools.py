@@ -297,12 +297,30 @@ def process_kml_file(file_path: str, output: OutputData, folder_id: str | None =
         print(f"⚠️  Could not parse {file_path}: {e}")
 
 
-def extract_data(input_dir: str, json_file: str, geojson_file: str, use_filenames: bool = False) -> None:
+def extract_data(input_dir: str, json_file: str, geojson_file: str, use_filenames: bool = False) -> tuple[int, int, int]:
+    """Extract GPX/KML files under input_dir into json_file/geojson_file.
+
+    If json_file already exists, its folders/points/tracks are kept and the newly
+    extracted ones are appended to them (merge), rather than overwriting the file.
+    Returns (new_points, new_tracks, new_folders) counts.
+    """
     output: OutputData = {"folders": [], "points": [], "tracks": []}
-    
+
+    merging = bool(json_file) and os.path.exists(json_file)
+    if merging:
+        with open(json_file, "r", encoding='utf-8') as f:
+            existing: OutputData = json.load(f)
+        output["folders"] = list(existing.get("folders", []))
+        output["points"] = list(existing.get("points", []))
+        output["tracks"] = list(existing.get("tracks", []))
+
+    existing_points = len(output["points"])
+    existing_tracks = len(output["tracks"])
+    existing_folders = len(output["folders"])
+
     folder_registry: dict[str, str] = {}
-    folder_objects: list[FolderData] = []
-    
+    folder_objects: list[FolderData] = list(output["folders"])
+
     def get_or_create_folder(folder_path: str, parent_id: str | None = None) -> str:
         """Get or create folder hierarchy, return the deepest folder's ID."""
         if folder_path in folder_registry:
@@ -353,10 +371,17 @@ def extract_data(input_dir: str, json_file: str, geojson_file: str, use_filename
     
     output["folders"] = folder_objects
 
+    new_points = len(output["points"]) - existing_points
+    new_tracks = len(output["tracks"]) - existing_tracks
+    new_folders = len(folder_objects) - existing_folders
+
     if json_file:
         with open(json_file, "w", encoding='utf-8') as f:
             json.dump(output, f, ensure_ascii=False, indent=2)
-        print(f"✅ Data saved to {json_file}")
+        if merging:
+            print(f"✅ Added {new_points} points, {new_tracks} tracks, {new_folders} folders to {json_file}")
+        else:
+            print(f"✅ Data saved to {json_file}")
 
     if geojson_file:
         geojson_features: list[Any] = []
@@ -383,6 +408,8 @@ def extract_data(input_dir: str, json_file: str, geojson_file: str, use_filename
         with open(geojson_file, "w", encoding='utf-8') as f:
             geojson.dump(geojson_collection, f, ensure_ascii=False, indent=2)
         print(f"✅ GeoJSON saved to {geojson_file}")
+
+    return (new_points, new_tracks, new_folders)
 
 
 def json_to_gpx(json_file: str, output_file: str) -> None:

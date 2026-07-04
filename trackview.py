@@ -468,9 +468,9 @@ class DataViewer:
         # Status bar
         sel_count = len(self.selected_ids)
         if sel_count > 0:
-            status = f" ↑↓:Nav  Space:Select  F2:Rename  F5:Move  F6:Export  F8:Delete  Enter:Details  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] ({sel_count} sel) "
+            status = f" ↑↓:Nav  Space:Select  F2:Rename  F4:Extract  F5:Move  F6:Export  F8:Delete  Enter:Details  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] ({sel_count} sel) "
         else:
-            status = f" ↑↓:Nav  Space:Select  F2:Rename  Enter:Details/Toggle  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] "
+            status = f" ↑↓:Nav  Space:Select  F2:Rename  F4:Extract  Enter:Details/Toggle  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] "
         self.stdscr.attron(curses.color_pair(5))
         try:
             self.stdscr.addstr(height - 1, 0, status.ljust(width - 1)[:width-1])
@@ -678,6 +678,33 @@ class DataViewer:
             self.show_message(f"Renamed to '{new_name}'")
         else:
             self.show_message("⚠️  Item not found")
+
+    def extract_more(self) -> None:
+        """Prompt for a directory and merge its GPX/KML files into the current data file."""
+        input_dir = prompt_text(self.stdscr, "Input directory")
+        if not input_dir:
+            return
+
+        if not Path(input_dir).is_dir():
+            self.show_message(f"⚠️  Directory not found: {input_dir}")
+            return
+
+        from tracktools import extract_data
+
+        new_points, new_tracks, new_folders = extract_data(input_dir, str(self.data_path), None, use_filenames=True)
+
+        # Reload data
+        self.data = load_data(str(self.data_path))
+        self.points = self.data.get("points", [])
+        self.tracks = self.data.get("tracks", [])
+        self.tree = build_tree(self.data)
+        self.refresh_visible_items()
+
+        # Adjust cursor if needed
+        if self.cursor >= len(self.visible_items):
+            self.cursor = max(0, len(self.visible_items) - 1)
+
+        self.show_message(f"Added {new_points} points, {new_tracks} tracks, {new_folders} folders")
 
     def show_message(self, text: str) -> None:
         """Show a brief message overlay."""
@@ -980,6 +1007,9 @@ class DataViewer:
                 elif key == curses.KEY_F2:
                     # Rename item under cursor
                     self.rename_current()
+                elif key == curses.KEY_F4:
+                    # Extract more data from a directory into the current file
+                    self.extract_more()
             else:  # detail mode
                 if key == 27 or key == curses.KEY_BACKSPACE or key == 127:  # Escape or Backspace
                     self.mode = "list"
