@@ -555,64 +555,97 @@ class DataViewer:
         self.stdscr.getch()  # Consume any key or timeout
         self.stdscr.timeout(100)  # Restore normal timeout
 
-    def export_dialog(self) -> tuple[str, str, bool] | None:
-        """Show export format dialog. Returns (format, filename, compress) or None if cancelled."""
-        height, width = self.stdscr.getmaxyx()
-        
-        lines = [
-            "Export selected items",
-            "",
-            "[G] GPX    [K] KML    [Z] KMZ    [Esc] Cancel"
-        ]
-        
-        max_line_len = max(len(line) for line in lines)
-        box_width = max_line_len + 4
-        box_height = len(lines) + 2
-        
-        start_x = max(0, (width - box_width) // 2)
-        start_y = max(0, (height - box_height) // 2)
-        
-        # Draw box
-        try:
-            self.stdscr.addstr(start_y, start_x, "┌" + "─" * (box_width - 2) + "┐")
-            for i in range(box_height - 2):
-                self.stdscr.addstr(start_y + 1 + i, start_x, "│" + " " * (box_width - 2) + "│")
-            self.stdscr.addstr(start_y + box_height - 1, start_x, "└" + "─" * (box_width - 2) + "┘")
-        except curses.error:
-            pass
-        
-        for i, line in enumerate(lines):
-            x = start_x + 2 + (max_line_len - len(line)) // 2
-            try:
-                self.stdscr.addstr(start_y + 1 + i, x, line)
-            except curses.error:
-                pass
-        
-        self.stdscr.refresh()
-        
-        # Get format choice
-        compress = False
-        while True:
-            key = self.stdscr.getch()
-            if key in (ord('g'), ord('G')):
-                fmt = "gpx"
-                break
-            elif key in (ord('k'), ord('K')):
-                fmt = "kml"
-                break
-            elif key in (ord('z'), ord('Z')):
-                fmt = "kmz"
-                compress = True
-                break
-            elif key in (27, ord('q'), ord('Q')):
+    def export_dialog(self) -> tuple[str, str, bool, bool] | None:
+        """Show export format dialog. Returns (format, filename, compress, organized) or None if cancelled."""
+        from cursesmenu import CursesMenu
+        from cursesmenu.items import MenuItem
+
+        formats = [("gpx", "GPX"), ("kml", "KML"), ("kmz", "KMZ")]
+        selection = {"index": 0}
+        toggles = {"organized": True}
+
+        class RadioItem(MenuItem):
+            """A format choice; selecting it toggles the radio mark instead of exiting."""
+
+            def __init__(self, label: str, index: int) -> None:
+                super().__init__(text=label, should_exit=False)
+                self.index = index
+
+            def show(self, index_text: str) -> str:
+                mark = "(*)" if selection["index"] == self.index else "( )"
+                return f"{index_text} - {mark} {self.text}"
+
+            def action(self) -> None:
+                selection["index"] = self.index
+
+        class ToggleItem(MenuItem):
+            """A checkbox item; selecting it flips the checkmark instead of exiting."""
+
+            def __init__(self, label: str, key: str) -> None:
+                super().__init__(text=label, should_exit=False)
+                self.key = key
+
+            def show(self, index_text: str) -> str:
+                mark = "[x]" if toggles[self.key] else "[ ]"
+                return f"{index_text} - {mark} {self.text}"
+
+            def action(self) -> None:
+                toggles[self.key] = not toggles[self.key]
+
+        class ConfirmItem(MenuItem):
+            def __init__(self) -> None:
+                super().__init__(text="OK", should_exit=True)
+
+            def get_return(self) -> tuple[int, bool]:
+                return (selection["index"], toggles["organized"])
+
+        class CancelItem(MenuItem):
+            def __init__(self) -> None:
+                super().__init__(text="Cancel", should_exit=True)
+
+            def get_return(self) -> None:
                 return None
-        
-        # Prompt for filename
+
+        class ExportMenu(CursesMenu):
+            def _set_up_colors(inner_self) -> None:
+                # Reuse the viewer's existing cursor color pair (black on white)
+                # instead of redefining pair 1, which the viewer uses for points.
+                inner_self.highlight = curses.color_pair(3)
+
+        menu = ExportMenu(
+            "Export selected items",
+            "Choose a format, then OK or Cancel",
+            show_exit_item=False,
+        )
+        for i, (_, label) in enumerate(formats):
+            menu.items.append(RadioItem(label, i))
+        menu.items.append(ToggleItem("Organized", "organized"))
+        menu.items.append(ConfirmItem())
+        menu.items.append(CancelItem())
+
+        def cancel_on_escape(_: int = 0) -> None:
+            menu.returned_value = None
+            menu.should_exit = True
+
+        menu.user_input_handlers[27] = cancel_on_escape  # Esc
+
+        # Reuse the already-initialized curses session instead of letting
+        # CursesMenu re-run curses.initscr()/endwin() around the parent app.
+        CursesMenu.stdscr = self.stdscr
+        menu.parent = self
+
+        menu_result = menu.show()
+        if menu_result is None:
+            return None
+
+        result_index, organized = menu_result
+        fmt, _ = formats[result_index]
+        compress = fmt == "kmz"
         default_name = f"export.{fmt}"
         result = self.prompt_filename(fmt, default_name)
         if not result:
             return None
-        return (result[0], result[1], compress)
+        return (result[0], result[1], compress, organized)
 
     def prompt_filename(self, fmt: str, default: str) -> tuple[str, str] | None:
         """Prompt user for filename. Returns (format, filename) or None."""
@@ -667,17 +700,17 @@ class DataViewer:
         result = self.export_dialog()
         if not result:
             return
-        
-        fmt, filename, compress = result
+
+        fmt, filename, compress, organized = result
         ids_to_export = list(self.selected_ids)
-        
+
         from tracktools import export_selected_gpx, export_selected_kml
-        
+
         if fmt == "gpx":
             count = export_selected_gpx(str(self.data_path), filename, ids_to_export)
         else:
-            count = export_selected_kml(str(self.data_path), filename, ids_to_export, compress)
-        
+            count = export_selected_kml(str(self.data_path), filename, ids_to_export, compress, organized)
+
         self.show_message(f"Exported {count} items to {filename}")
 
     def run(self):
