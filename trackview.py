@@ -102,24 +102,137 @@ def build_tree(data: dict) -> TreeNode:
                 sort_children(child)
     
     sort_children(root)
-    
+
     return root
 
 
 def flatten_tree(node: TreeNode, depth: int = 0) -> list[tuple[TreeNode, int]]:
     """Flatten tree to visible items list with depth info."""
     result = []
-    
+
     # Don't show root itself
     if node.name != "Root":
         result.append((node, depth))
-    
+
     if node.is_folder and node.expanded:
         for child in node.children:
             child_depth = depth + 1 if node.name != "Root" else 0
             result.extend(flatten_tree(child, child_depth))
-    
+
     return result
+
+
+def _box_origin(stdscr, box_width: int, box_height: int) -> tuple[int, int]:
+    """Compute the top-left corner to center a box of the given size on screen."""
+    height, width = stdscr.getmaxyx()
+    start_x = max(0, (width - box_width) // 2)
+    start_y = max(0, (height - box_height) // 2)
+    return start_y, start_x
+
+
+def _draw_box(stdscr, start_y: int, start_x: int, box_width: int, box_height: int) -> None:
+    """Draw a bordered box at the given position."""
+    try:
+        stdscr.addstr(start_y, start_x, "┌" + "─" * (box_width - 2) + "┐")
+        for i in range(box_height - 2):
+            stdscr.addstr(start_y + 1 + i, start_x, "│" + " " * (box_width - 2) + "│")
+        stdscr.addstr(start_y + box_height - 1, start_x, "└" + "─" * (box_width - 2) + "┘")
+    except curses.error:
+        pass
+
+
+def prompt_text(stdscr, label: str, default: str | None = None) -> str | None:
+    """Prompt for a line of text in a small centered box.
+
+    Returns the trimmed input, `default` if input was empty and a default was
+    given, or None if input was empty with no default.
+    """
+    prompt = f"{label} [{default}]: " if default is not None else f"{label}: "
+    box_width = max(50, len(prompt) + 10)
+    box_height = 4
+    start_y, start_x = _box_origin(stdscr, box_width, box_height)
+
+    _draw_box(stdscr, start_y, start_x, box_width, box_height)
+    try:
+        stdscr.addstr(start_y + 1, start_x + 2, prompt)
+    except curses.error:
+        pass
+    stdscr.refresh()
+
+    curses.flushinp()  # Clear any buffered input
+    stdscr.timeout(-1)  # Disable timeout for blocking input
+    curses.curs_set(1)  # Show cursor
+    curses.echo()
+
+    try:
+        input_win_x = start_x + 2 + len(prompt)
+        stdscr.move(start_y + 1, input_win_x)
+        user_input = stdscr.getstr(start_y + 1, input_win_x, box_width - len(prompt) - 4)
+        text = user_input.decode('utf-8').strip()
+    except curses.error:
+        text = ""
+    finally:
+        curses.noecho()
+        curses.curs_set(0)
+        stdscr.timeout(100)  # Restore normal timeout
+
+    return text or default
+
+
+def _make_menu(stdscr, title: str, subtitle: str = ""):
+    """Create a CursesMenu that reuses the app's already-initialized curses session.
+
+    CursesMenu normally assumes it owns the whole curses lifecycle (it calls
+    initscr()/endwin() itself). Setting stdscr and a non-None parent makes it
+    skip that and just reuse the already-running session instead.
+    """
+    from cursesmenu import CursesMenu
+
+    class _AppMenu(CursesMenu):
+        def _set_up_colors(inner_self) -> None:
+            # Reuse the viewer's existing cursor color pair (black on white)
+            # instead of redefining pair 1, which the viewer uses for points.
+            inner_self.highlight = curses.color_pair(3)
+
+    menu = _AppMenu(title, subtitle, show_exit_item=False)
+    CursesMenu.stdscr = stdscr
+    menu.parent = True
+    return menu
+
+
+def confirm(stdscr, title: str, subtitle: str = "", yes_label: str = "Yes", no_label: str = "No") -> bool:
+    """Show a Yes/No confirmation menu. Returns True if the user confirms."""
+    from cursesmenu.items import MenuItem
+
+    class ChoiceItem(MenuItem):
+        def __init__(self, label: str, value: bool) -> None:
+            super().__init__(text=label, should_exit=True)
+            self.value = value
+
+        def get_return(self) -> bool:
+            return self.value
+
+    menu = _make_menu(stdscr, title, subtitle)
+    menu.items.append(ChoiceItem(yes_label, True))
+    menu.items.append(ChoiceItem(no_label, False))
+
+    def choose_yes(_: int = 0) -> None:
+        menu.returned_value = True
+        menu.should_exit = True
+
+    def choose_no(_: int = 0) -> None:
+        menu.returned_value = False
+        menu.should_exit = True
+
+    menu.user_input_handlers[ord('y')] = choose_yes
+    menu.user_input_handlers[ord('Y')] = choose_yes
+    menu.user_input_handlers[ord('n')] = choose_no
+    menu.user_input_handlers[ord('N')] = choose_no
+    menu.user_input_handlers[ord('q')] = choose_no
+    menu.user_input_handlers[ord('Q')] = choose_no
+    menu.user_input_handlers[27] = choose_no  # Esc
+
+    return bool(menu.show())
 
 
 class DataViewer:
@@ -469,46 +582,12 @@ class DataViewer:
 
     def confirm_delete(self, count: int) -> bool:
         """Show delete confirmation dialog. Returns True if confirmed."""
-        height, width = self.stdscr.getmaxyx()
-        
-        lines = [
+        return confirm(
+            self.stdscr,
             f"Delete {count} selected item{'s' if count > 1 else ''}?",
-            "",
-            "[Y] Yes, delete    [N] No, cancel"
-        ]
-        
-        max_line_len = max(len(line) for line in lines)
-        box_width = max_line_len + 4
-        box_height = len(lines) + 2
-        
-        start_x = max(0, (width - box_width) // 2)
-        start_y = max(0, (height - box_height) // 2)
-        
-        # Draw box
-        try:
-            self.stdscr.addstr(start_y, start_x, "┌" + "─" * (box_width - 2) + "┐")
-            for i in range(box_height - 2):
-                self.stdscr.addstr(start_y + 1 + i, start_x, "│" + " " * (box_width - 2) + "│")
-            self.stdscr.addstr(start_y + box_height - 1, start_x, "└" + "─" * (box_width - 2) + "┘")
-        except curses.error:
-            pass
-        
-        # Draw content
-        for i, line in enumerate(lines):
-            x = start_x + 2 + (max_line_len - len(line)) // 2
-            try:
-                self.stdscr.addstr(start_y + 1 + i, x, line)
-            except curses.error:
-                pass
-        
-        self.stdscr.refresh()
-        
-        while True:
-            key = self.stdscr.getch()
-            if key in (ord('y'), ord('Y')):
-                return True
-            elif key in (ord('n'), ord('N'), 27, ord('q'), ord('Q')):
-                return False
+            yes_label="Yes, delete",
+            no_label="No, cancel",
+        )
 
     def delete_selected(self) -> None:
         """Delete selected items and reload data."""
@@ -534,47 +613,10 @@ class DataViewer:
 
     def prompt_rename(self, current_name: str) -> str | None:
         """Prompt user for a new name. Returns the new name, or None if cancelled/invalid."""
-        height, width = self.stdscr.getmaxyx()
-
-        prompt = f"Rename '{current_name}' to: "
-        box_width = max(50, len(prompt) + 10)
-        box_height = 4
-
-        start_x = max(0, (width - box_width) // 2)
-        start_y = max(0, (height - box_height) // 2)
-
-        # Draw box
-        try:
-            self.stdscr.addstr(start_y, start_x, "┌" + "─" * (box_width - 2) + "┐")
-            for i in range(box_height - 2):
-                self.stdscr.addstr(start_y + 1 + i, start_x, "│" + " " * (box_width - 2) + "│")
-            self.stdscr.addstr(start_y + box_height - 1, start_x, "└" + "─" * (box_width - 2) + "┘")
-            self.stdscr.addstr(start_y + 1, start_x + 2, prompt)
-        except curses.error:
-            pass
-
-        self.stdscr.refresh()
-        curses.flushinp()  # Clear any buffered input
-        self.stdscr.timeout(-1)  # Disable timeout for blocking input
-        curses.curs_set(1)  # Show cursor
-        curses.echo()
-
-        try:
-            input_win_x = start_x + 2 + len(prompt)
-            self.stdscr.move(start_y + 1, input_win_x)
-            user_input = self.stdscr.getstr(start_y + 1, input_win_x, box_width - len(prompt) - 4)
-            new_name = user_input.decode('utf-8').strip()
-        except curses.error:
-            new_name = ""
-        finally:
-            curses.noecho()
-            curses.curs_set(0)
-            self.stdscr.timeout(100)  # Restore normal timeout
-
+        new_name = prompt_text(self.stdscr, f"Rename '{current_name}' to")
         if not new_name:
             self.show_message("⚠️  Name cannot be empty")
             return None
-
         return new_name
 
     def rename_current(self) -> None:
@@ -612,22 +654,16 @@ class DataViewer:
 
     def show_message(self, text: str) -> None:
         """Show a brief message overlay."""
-        height, width = self.stdscr.getmaxyx()
-        
         box_width = len(text) + 4
         box_height = 3
-        
-        start_x = max(0, (width - box_width) // 2)
-        start_y = max(0, (height - box_height) // 2)
-        
+        start_y, start_x = _box_origin(self.stdscr, box_width, box_height)
+
+        _draw_box(self.stdscr, start_y, start_x, box_width, box_height)
         try:
-            self.stdscr.addstr(start_y, start_x, "┌" + "─" * (box_width - 2) + "┐")
-            self.stdscr.addstr(start_y + 1, start_x, "│" + " " * (box_width - 2) + "│")
-            self.stdscr.addstr(start_y + 2, start_x, "└" + "─" * (box_width - 2) + "┘")
             self.stdscr.addstr(start_y + 1, start_x + 2, text)
         except curses.error:
             pass
-        
+
         self.stdscr.refresh()
         self.stdscr.timeout(1500)  # Wait 1.5s
         self.stdscr.getch()  # Consume any key or timeout
@@ -635,7 +671,6 @@ class DataViewer:
 
     def export_dialog(self) -> tuple[str, str, bool, bool] | None:
         """Show export format dialog. Returns (format, filename, compress, organized) or None if cancelled."""
-        from cursesmenu import CursesMenu
         from cursesmenu.items import MenuItem
 
         formats = [("gpx", "GPX"), ("kml", "KML"), ("kmz", "KMZ")]
@@ -684,17 +719,7 @@ class DataViewer:
             def get_return(self) -> None:
                 return None
 
-        class ExportMenu(CursesMenu):
-            def _set_up_colors(inner_self) -> None:
-                # Reuse the viewer's existing cursor color pair (black on white)
-                # instead of redefining pair 1, which the viewer uses for points.
-                inner_self.highlight = curses.color_pair(3)
-
-        menu = ExportMenu(
-            "Export selected items",
-            "Choose a format, then OK or Cancel",
-            show_exit_item=False,
-        )
+        menu = _make_menu(self.stdscr, "Export selected items", "Choose a format, then OK or Cancel")
         for i, (_, label) in enumerate(formats):
             menu.items.append(RadioItem(label, i))
         menu.items.append(ToggleItem("Organized", "organized"))
@@ -706,11 +731,6 @@ class DataViewer:
             menu.should_exit = True
 
         menu.user_input_handlers[27] = cancel_on_escape  # Esc
-
-        # Reuse the already-initialized curses session instead of letting
-        # CursesMenu re-run curses.initscr()/endwin() around the parent app.
-        CursesMenu.stdscr = self.stdscr
-        menu.parent = self
 
         menu_result = menu.show()
         if menu_result is None:
@@ -734,43 +754,7 @@ class DataViewer:
 
     def prompt_filename(self, fmt: str, default: str) -> tuple[str, str] | None:
         """Prompt user for filename. Returns (format, filename) or None."""
-        height, width = self.stdscr.getmaxyx()
-        
-        prompt = f"Filename [{default}]: "
-        box_width = max(50, len(prompt) + 10)
-        box_height = 4
-        
-        start_x = max(0, (width - box_width) // 2)
-        start_y = max(0, (height - box_height) // 2)
-        
-        # Draw box
-        try:
-            self.stdscr.addstr(start_y, start_x, "┌" + "─" * (box_width - 2) + "┐")
-            for i in range(box_height - 2):
-                self.stdscr.addstr(start_y + 1 + i, start_x, "│" + " " * (box_width - 2) + "│")
-            self.stdscr.addstr(start_y + box_height - 1, start_x, "└" + "─" * (box_width - 2) + "┘")
-            self.stdscr.addstr(start_y + 1, start_x + 2, prompt)
-        except curses.error:
-            pass
-        
-        self.stdscr.refresh()
-        curses.flushinp()  # Clear any buffered input
-        self.stdscr.timeout(-1)  # Disable timeout for blocking input
-        curses.curs_set(1)  # Show cursor
-        curses.echo()
-        
-        try:
-            input_win_x = start_x + 2 + len(prompt)
-            self.stdscr.move(start_y + 1, input_win_x)
-            user_input = self.stdscr.getstr(start_y + 1, input_win_x, box_width - len(prompt) - 4)
-            filename = user_input.decode('utf-8').strip() or default
-        except curses.error:
-            filename = default
-        finally:
-            curses.noecho()
-            curses.curs_set(0)
-            self.stdscr.timeout(100)  # Restore normal timeout
-        
+        filename = prompt_text(self.stdscr, "Filename", default)
         if not filename:
             return None
 
@@ -782,47 +766,7 @@ class DataViewer:
 
     def prompt_foldername(self, default: str) -> str | None:
         """Prompt user for an output folder name. Returns the folder name/path or None."""
-        height, width = self.stdscr.getmaxyx()
-
-        prompt = f"Folder name [{default}]: "
-        box_width = max(50, len(prompt) + 10)
-        box_height = 4
-
-        start_x = max(0, (width - box_width) // 2)
-        start_y = max(0, (height - box_height) // 2)
-
-        # Draw box
-        try:
-            self.stdscr.addstr(start_y, start_x, "┌" + "─" * (box_width - 2) + "┐")
-            for i in range(box_height - 2):
-                self.stdscr.addstr(start_y + 1 + i, start_x, "│" + " " * (box_width - 2) + "│")
-            self.stdscr.addstr(start_y + box_height - 1, start_x, "└" + "─" * (box_width - 2) + "┘")
-            self.stdscr.addstr(start_y + 1, start_x + 2, prompt)
-        except curses.error:
-            pass
-
-        self.stdscr.refresh()
-        curses.flushinp()  # Clear any buffered input
-        self.stdscr.timeout(-1)  # Disable timeout for blocking input
-        curses.curs_set(1)  # Show cursor
-        curses.echo()
-
-        try:
-            input_win_x = start_x + 2 + len(prompt)
-            self.stdscr.move(start_y + 1, input_win_x)
-            user_input = self.stdscr.getstr(start_y + 1, input_win_x, box_width - len(prompt) - 4)
-            folder_name = user_input.decode('utf-8').strip() or default
-        except curses.error:
-            folder_name = default
-        finally:
-            curses.noecho()
-            curses.curs_set(0)
-            self.stdscr.timeout(100)  # Restore normal timeout
-
-        if not folder_name:
-            return None
-
-        return folder_name
+        return prompt_text(self.stdscr, "Folder name", default)
 
     def export_selected(self) -> None:
         """Export selected items to GPX or KML/KMZ."""
@@ -955,84 +899,22 @@ class DataViewer:
 def prompt_extract_data(stdscr, data_path: Path) -> bool:
     """Show a prompt asking to extract data. Returns True if extraction successful."""
     height, width = stdscr.getmaxyx()
-    
-    # First dialog: ask to extract
-    lines = [
+
+    stdscr.clear()
+    stdscr.refresh()
+    if not confirm(
+        stdscr,
         f"File not found: {data_path}",
-        "",
         "Extract data from GPX/KML files?",
-        "",
-        "[Y] Yes, extract    [N] No, exit"
-    ]
-    
-    max_line_len = max(len(line) for line in lines)
-    box_width = max_line_len + 4
-    box_height = len(lines) + 2
-    
-    start_x = max(0, (width - box_width) // 2)
-    start_y = max(0, (height - box_height) // 2)
-    
+        yes_label="Yes, extract",
+        no_label="No, exit",
+    ):
+        return False
+
+    # Ask for input directory
     stdscr.clear()
-    try:
-        stdscr.addstr(start_y, start_x, "┌" + "─" * (box_width - 2) + "┐")
-        for i in range(box_height - 2):
-            stdscr.addstr(start_y + 1 + i, start_x, "│" + " " * (box_width - 2) + "│")
-        stdscr.addstr(start_y + box_height - 1, start_x, "└" + "─" * (box_width - 2) + "┘")
-    except curses.error:
-        pass
-    
-    for i, line in enumerate(lines):
-        x = start_x + 2 + (max_line_len - len(line)) // 2
-        try:
-            stdscr.addstr(start_y + 1 + i, x, line)
-        except curses.error:
-            pass
-    
-    stdscr.refresh()
-    
-    while True:
-        key = stdscr.getch()
-        if key in (ord('y'), ord('Y')):
-            break
-        elif key in (ord('n'), ord('N'), 27, ord('q'), ord('Q')):
-            return False
-    
-    # Second dialog: ask for input directory
-    prompt = f"Input directory: "
-    box_width = max(60, len(prompt) + 20)
-    box_height = 4
-    
-    start_x = max(0, (width - box_width) // 2)
-    start_y = max(0, (height - box_height) // 2)
-    
-    stdscr.clear()
-    try:
-        stdscr.addstr(start_y, start_x, "┌" + "─" * (box_width - 2) + "┐")
-        for i in range(box_height - 2):
-            stdscr.addstr(start_y + 1 + i, start_x, "│" + " " * (box_width - 2) + "│")
-        stdscr.addstr(start_y + box_height - 1, start_x, "└" + "─" * (box_width - 2) + "┘")
-        stdscr.addstr(start_y + 1, start_x + 2, prompt)
-    except curses.error:
-        pass
-    
-    stdscr.refresh()
-    curses.flushinp()
-    stdscr.timeout(-1)
-    curses.curs_set(1)
-    curses.echo()
-    
-    try:
-        input_x = start_x + 2 + len(prompt)
-        stdscr.move(start_y + 1, input_x)
-        user_input = stdscr.getstr(start_y + 1, input_x, box_width - len(prompt) - 4)
-        input_dir = user_input.decode('utf-8').strip()
-    except curses.error:
-        input_dir = None
-    finally:
-        curses.noecho()
-        curses.curs_set(0)
-        stdscr.timeout(100)
-    
+    input_dir = prompt_text(stdscr, "Input directory")
+
     # Check if directory exists
     if not input_dir or not Path(input_dir).is_dir():
         stdscr.clear()
