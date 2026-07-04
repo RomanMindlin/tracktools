@@ -765,6 +765,81 @@ def rename_item(json_file: str, item_id: str, new_name: str) -> bool:
     return False
 
 
+def move_items(json_file: str, ids: list[str], destination_id: str | None) -> int:
+    """Move folders/points/tracks to a new parent folder, or the top level if
+    destination_id is None. Returns count of items actually moved.
+
+    A folder's own move only needs to change that folder's parent_id/folder_id;
+    its contents reference it by id and don't need touching, even though the
+    folder's absolute position in the tree changes. Skips items already at the
+    destination, moving a folder into itself, moving a folder into one of its
+    own descendants (would disconnect it from the root), and an unknown
+    destination_id.
+    """
+    with open(json_file, "r", encoding='utf-8') as f:
+        data: dict[str, Any] = json.load(f)
+
+    folders_data = data.get("folders", [])
+    folder_by_id = {f["id"]: f for f in folders_data}
+
+    if destination_id is not None and destination_id not in folder_by_id:
+        return 0
+
+    def collect_descendants(folder_id: str, acc: set[str]) -> None:
+        for f in folders_data:
+            if f.get("parent_id") == folder_id:
+                acc.add(f["id"])
+                collect_descendants(f["id"], acc)
+
+    ids_set = set(ids)
+    moved = 0
+
+    for folder in folders_data:
+        if folder["id"] not in ids_set:
+            continue
+        if destination_id == folder["id"]:
+            continue
+        if destination_id is not None:
+            descendants: set[str] = set()
+            collect_descendants(folder["id"], descendants)
+            if destination_id in descendants:
+                continue
+        if folder.get("parent_id") == destination_id:
+            continue
+        if destination_id is None:
+            folder.pop("parent_id", None)
+        else:
+            folder["parent_id"] = destination_id
+        moved += 1
+
+    for point in data.get("points", []):
+        if point["id"] not in ids_set:
+            continue
+        if point.get("folder_id") == destination_id:
+            continue
+        if destination_id is None:
+            point.pop("folder_id", None)
+        else:
+            point["folder_id"] = destination_id
+        moved += 1
+
+    for track in data.get("tracks", []):
+        if track["id"] not in ids_set:
+            continue
+        if track.get("folder_id") == destination_id:
+            continue
+        if destination_id is None:
+            track.pop("folder_id", None)
+        else:
+            track["folder_id"] = destination_id
+        moved += 1
+
+    with open(json_file, "w", encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    return moved
+
+
 def _collect_items_by_ids(data: dict[str, Any], ids: list[str]) -> tuple[list, list, set[str]]:
     """
     Collect points and tracks matching the given IDs (including folder contents).
@@ -1213,6 +1288,12 @@ def main() -> None:
     rename_parser.add_argument("--id", type=str, required=True, help="ID of the item to rename")
     rename_parser.add_argument("--name", type=str, required=True, help="New name for the item")
 
+    move_parser = subparsers.add_parser("move", help="Move items to a different folder")
+    move_parser.add_argument("--json-file", type=str, required=True, help="JSON data file")
+    move_parser.add_argument("--ids", type=str, required=True, help="Comma-separated list of IDs to move")
+    move_parser.add_argument("--destination", type=str, help="ID of the destination folder")
+    move_parser.add_argument("--root", action="store_true", help="Move to the top level (no parent folder), instead of --destination")
+
     args = parser.parse_args()
 
     if args.command == "extract":
@@ -1247,6 +1328,20 @@ def main() -> None:
             print(f"✅ Renamed item to '{new_name}'")
         else:
             print(f"⚠️  No item found with ID {args.id}")
+    elif args.command == "move":
+        ids = [id.strip() for id in args.ids.split(",") if id.strip()]
+        if not ids:
+            print("⚠️  No IDs provided")
+            return
+        if args.root and args.destination:
+            print("⚠️  Use either --destination or --root, not both")
+            return
+        if not args.root and not args.destination:
+            print("⚠️  --destination or --root is required")
+            return
+        destination_id = None if args.root else args.destination
+        moved = move_items(args.json_file, ids, destination_id)
+        print(f"✅ Moved {moved} items")
     else:
         parser.print_help()
 

@@ -235,6 +235,33 @@ def confirm(stdscr, title: str, subtitle: str = "", yes_label: str = "Yes", no_l
     return bool(menu.show())
 
 
+def select_from_list(stdscr, title: str, subtitle: str, options: list[str]) -> int | None:
+    """Show a single-select list menu. Returns the chosen index, or None if cancelled."""
+    from cursesmenu.items import MenuItem
+
+    class ChoiceItem(MenuItem):
+        def __init__(self, label: str, index: int) -> None:
+            super().__init__(text=label, should_exit=True)
+            self.index = index
+
+        def get_return(self) -> int:
+            return self.index
+
+    menu = _make_menu(stdscr, title, subtitle)
+    for i, label in enumerate(options):
+        menu.items.append(ChoiceItem(label, i))
+
+    def cancel(_: int = 0) -> None:
+        menu.returned_value = None
+        menu.should_exit = True
+
+    menu.user_input_handlers[ord('q')] = cancel
+    menu.user_input_handlers[ord('Q')] = cancel
+    menu.user_input_handlers[27] = cancel  # Esc
+
+    return menu.show()
+
+
 class DataViewer:
     def __init__(self, stdscr, data: dict, data_path: Path):
         self.stdscr = stdscr
@@ -441,7 +468,7 @@ class DataViewer:
         # Status bar
         sel_count = len(self.selected_ids)
         if sel_count > 0:
-            status = f" ↑↓:Nav  Space:Select  F2:Rename  F6:Export  F8:Delete  Enter:Details  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] ({sel_count} sel) "
+            status = f" ↑↓:Nav  Space:Select  F2:Rename  F5:Move  F6:Export  F8:Delete  Enter:Details  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] ({sel_count} sel) "
         else:
             status = f" ↑↓:Nav  Space:Select  F2:Rename  Enter:Details/Toggle  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] "
         self.stdscr.attron(curses.color_pair(5))
@@ -797,6 +824,72 @@ class DataViewer:
 
         self.show_message(f"Exported {count} items to {path}")
 
+    def move_selected(self) -> None:
+        """Move selected items to a chosen destination folder (or root) and reload data."""
+        if not self.selected_ids:
+            return
+
+        folders = self.data.get("folders", [])
+        folder_by_id = {f["id"]: f for f in folders}
+
+        # Folders that would create a cycle if used as the destination: any
+        # selected folder itself, plus all of its descendants.
+        excluded: set[str] = set()
+
+        def mark_folder_and_children(folder_id: str) -> None:
+            excluded.add(folder_id)
+            for f in folders:
+                if f.get("parent_id") == folder_id:
+                    mark_folder_and_children(f["id"])
+
+        for item_id in self.selected_ids:
+            if item_id in folder_by_id:
+                mark_folder_and_children(item_id)
+
+        # Build an indented, name-sorted list of valid destination folders,
+        # covering the full hierarchy regardless of expand/collapse state.
+        children_by_parent: dict[str | None, list[dict]] = {}
+        for f in folders:
+            if f["id"] in excluded:
+                continue
+            children_by_parent.setdefault(f.get("parent_id"), []).append(f)
+        for children in children_by_parent.values():
+            children.sort(key=lambda f: f["name"].lower())
+
+        options = ["Root (top level)"]
+        destinations: list[str | None] = [None]
+
+        def walk(parent_id: str | None, depth: int) -> None:
+            for f in children_by_parent.get(parent_id, []):
+                options.append("  " * depth + f["name"])
+                destinations.append(f["id"])
+                walk(f["id"], depth + 1)
+
+        walk(None, 0)
+
+        choice = select_from_list(self.stdscr, "Move selected items", "Choose a destination", options)
+        if choice is None:
+            return
+        destination_id = destinations[choice]
+
+        from tracktools import move_items
+
+        moved = move_items(str(self.data_path), list(self.selected_ids), destination_id)
+
+        # Reload data
+        self.data = load_data(str(self.data_path))
+        self.points = self.data.get("points", [])
+        self.tracks = self.data.get("tracks", [])
+        self.tree = build_tree(self.data)
+        self.selected_ids.clear()
+        self.refresh_visible_items()
+
+        # Adjust cursor if needed
+        if self.cursor >= len(self.visible_items):
+            self.cursor = max(0, len(self.visible_items) - 1)
+
+        self.show_message(f"Moved {moved} items")
+
     def run(self):
         """Main event loop."""
         while True:
@@ -880,6 +973,10 @@ class DataViewer:
                     # Export selected items
                     if self.selected_ids:
                         self.export_selected()
+                elif key == curses.KEY_F5:
+                    # Move selected items
+                    if self.selected_ids:
+                        self.move_selected()
                 elif key == curses.KEY_F2:
                     # Rename item under cursor
                     self.rename_current()
