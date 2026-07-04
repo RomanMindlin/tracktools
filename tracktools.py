@@ -390,6 +390,7 @@ def json_to_gpx(json_file: str, output_file: str) -> None:
         data: dict[str, Any] = json.load(f)
 
     gpx = gpxpy.gpx.GPX()
+    gpx.name = os.path.splitext(os.path.basename(output_file))[0]
 
     for point in data.get("points", []):
         wp = gpxpy.gpx.GPXWaypoint(
@@ -464,11 +465,12 @@ def json_to_gpx_organized(json_file: str, output_dir: str) -> None:
         dir_by_folder_id[folder_id] = folder_dir
         return folder_dir
 
-    def write_gpx(output_path: str, points: list, tracks: list) -> int:
+    def write_gpx(output_path: str, title: str, points: list, tracks: list) -> int:
         if not points and not tracks:
             return 0
 
         gpx = gpxpy.gpx.GPX()
+        gpx.name = title
         for point in points:
             wp = gpxpy.gpx.GPXWaypoint(
                 latitude=point["latitude"],
@@ -505,6 +507,7 @@ def json_to_gpx_organized(json_file: str, output_dir: str) -> None:
     files_written = 0
     files_written += 1 if write_gpx(
         os.path.join(output_dir, "export.gpx"),
+        os.path.basename(os.path.normpath(output_dir)),
         points_by_folder.get(None, []),
         tracks_by_folder.get(None, []),
     ) else 0
@@ -517,6 +520,7 @@ def json_to_gpx_organized(json_file: str, output_dir: str) -> None:
             output_path = os.path.join(parent_dir, f"{_safe_folder_name(folder_data['name'])}.gpx")
         files_written += 1 if write_gpx(
             output_path,
+            folder_data["name"],
             points_by_folder.get(folder_id, []),
             tracks_by_folder.get(folder_id, []),
         ) else 0
@@ -807,9 +811,10 @@ def export_selected_gpx(json_file: str, output_file: str, ids: list[str]) -> int
         data: dict[str, Any] = json.load(f)
     
     points, tracks, _ = _collect_items_by_ids(data, ids)
-    
+
     gpx = gpxpy.gpx.GPX()
-    
+    gpx.name = os.path.splitext(os.path.basename(output_file))[0]
+
     for point in points:
         wp = gpxpy.gpx.GPXWaypoint(
             latitude=point["latitude"],
@@ -896,11 +901,12 @@ def export_selected_gpx_organized(json_file: str, output_dir: str, ids: list[str
         dir_by_folder_id[folder_id] = folder_dir
         return folder_dir
 
-    def write_gpx(output_path: str, folder_points: list, folder_tracks: list) -> int:
+    def write_gpx(output_path: str, title: str, folder_points: list, folder_tracks: list) -> int:
         if not folder_points and not folder_tracks:
             return 0
 
         gpx = gpxpy.gpx.GPX()
+        gpx.name = title
         for point in folder_points:
             wp = gpxpy.gpx.GPXWaypoint(
                 latitude=point["latitude"],
@@ -936,6 +942,7 @@ def export_selected_gpx_organized(json_file: str, output_dir: str, ids: list[str
 
     total = write_gpx(
         os.path.join(output_dir, "export.gpx"),
+        os.path.basename(os.path.normpath(output_dir)),
         points_by_folder.get(None, []),
         tracks_by_folder.get(None, []),
     )
@@ -949,6 +956,7 @@ def export_selected_gpx_organized(json_file: str, output_dir: str, ids: list[str
             output_path = os.path.join(parent_dir, f"{_safe_folder_name(folder_data['name'])}.gpx")
         total += write_gpx(
             output_path,
+            folder_data["name"],
             points_by_folder.get(folder_id, []),
             tracks_by_folder.get(folder_id, []),
         )
