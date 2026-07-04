@@ -153,8 +153,21 @@ def prompt_text(stdscr, label: str, default: str | None = None) -> str | None:
     Returns the trimmed input, `default` if input was empty and a default was
     given, or None if input was empty with no default.
     """
-    prompt = f"{label} [{default}]: " if default is not None else f"{label}: "
-    box_width = max(50, len(prompt) + 10)
+    height, width = stdscr.getmaxyx()
+
+    suffix = f" [{default}]: " if default is not None else ": "
+    min_input_width = 40  # always try to leave at least this much room to type
+    max_box_width = max(20, width - 4)  # keep the box fully on screen
+
+    # label may embed a long object name (e.g. rename's "Rename 'X' to"); if
+    # showing it in full would crowd out room to type, truncate the displayed
+    # label rather than shrinking the input field below a usable size.
+    max_label_len = max(5, max_box_width - len(suffix) - min_input_width - 4)
+    if len(label) > max_label_len:
+        label = label[:max_label_len - 1] + "…"
+
+    prompt = f"{label}{suffix}"
+    box_width = min(max_box_width, max(50, len(prompt) + min_input_width + 4))
     box_height = 4
     start_y, start_x = _box_origin(stdscr, box_width, box_height)
 
@@ -173,7 +186,14 @@ def prompt_text(stdscr, label: str, default: str | None = None) -> str | None:
     try:
         input_win_x = start_x + 2 + len(prompt)
         stdscr.move(start_y + 1, input_win_x)
-        user_input = stdscr.getstr(start_y + 1, input_win_x, box_width - len(prompt) - 4)
+        # getstr's length argument caps captured input at n-1 *raw bytes* (it
+        # reserves one slot for an internal NUL terminator, and counts encoded
+        # bytes, not decoded characters). Sizing this off the on-screen
+        # character width silently truncates any multi-byte text (Cyrillic,
+        # etc.) well before the visual limit, since those characters take 2+
+        # bytes each. Use a generous fixed byte budget instead, fully decoupled
+        # from the box's visual width, so real-world names are never cut.
+        user_input = stdscr.getstr(start_y + 1, input_win_x, 1024)
         text = user_input.decode('utf-8').strip()
     except curses.error:
         text = ""
