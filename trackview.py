@@ -7,6 +7,7 @@ Press Enter to view details or expand/collapse folders, q to quit, Escape to go 
 import argparse
 import curses
 import json
+from math import radians, sin, cos, sqrt, atan2
 from pathlib import Path
 
 
@@ -610,7 +611,6 @@ class DataViewer:
                 # Calculate approximate distance
                 try:
                     total_dist = 0
-                    from math import radians, sin, cos, sqrt, atan2
                     for i in range(1, len(track_points)):
                         lat1, lon1 = radians(track_points[i-1]['latitude']), radians(track_points[i-1]['longitude'])
                         lat2, lon2 = radians(track_points[i]['latitude']), radians(track_points[i]['longitude'])

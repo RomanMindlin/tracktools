@@ -427,7 +427,6 @@ def json_to_gpx(json_file: str, output_file: str) -> None:
             type=point.get("icon")
         )
         if point.get("time"):
-            from datetime import datetime
             wp.time = datetime.fromisoformat(point["time"])
         gpx.waypoints.append(wp)
 
@@ -440,7 +439,6 @@ def json_to_gpx(json_file: str, output_file: str) -> None:
                 longitude=pt["longitude"]
             )
             if pt.get("time"):
-                from datetime import datetime
                 gpx_pt.time = datetime.fromisoformat(pt["time"])
             segment.points.append(gpx_pt)
         gpx_track.segments.append(segment)
@@ -1043,7 +1041,6 @@ def export_selected_gpx(json_file: str, output_file: str, ids: list[str]) -> int
             type=point.get("icon")
         )
         if point.get("time"):
-            from datetime import datetime
             wp.time = datetime.fromisoformat(point["time"])
         gpx.waypoints.append(wp)
     
@@ -1056,7 +1053,6 @@ def export_selected_gpx(json_file: str, output_file: str, ids: list[str]) -> int
                 longitude=pt["longitude"]
             )
             if pt.get("time"):
-                from datetime import datetime
                 gpx_pt.time = datetime.fromisoformat(pt["time"])
             segment.points.append(gpx_pt)
         gpx_track.segments.append(segment)
