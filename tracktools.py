@@ -457,7 +457,35 @@ def _safe_folder_name(name: str) -> str:
     return cleaned or "untitled"
 
 
-def json_to_gpx_organized(json_file: str, output_dir: str) -> None:
+def _top_level_folder_id(folder_id: str | None, folder_by_id: dict[str, dict]) -> str | None:
+    """Walk up the parent_id chain from folder_id to find its top-level (root
+    child) ancestor folder id. Returns None if folder_id is falsy (already at
+    the top level/root)."""
+    if not folder_id:
+        return None
+    current = folder_id
+    while True:
+        folder = folder_by_id.get(current)
+        if not folder:
+            return current
+        parent_id = folder.get("parent_id")
+        if not parent_id:
+            return current
+        current = parent_id
+
+
+def _group_by_top_level(items: list[dict], folder_by_id: dict[str, dict]) -> dict[str | None, list]:
+    """Group points/tracks by their top-level ancestor folder id (walking up
+    parent_id chains from each item's own folder_id), for flat organized
+    exports. Items with no folder are grouped under None."""
+    grouped: dict[str | None, list] = defaultdict(list)
+    for item in items:
+        top_id = _top_level_folder_id(item.get("folder_id"), folder_by_id)
+        grouped[top_id].append(item)
+    return grouped
+
+
+def json_to_gpx_organized(json_file: str, output_dir: str, flat: bool = False) -> None:
     """Export JSON data as a tree of GPX files mirroring the data's folder structure.
 
     Creates output_dir plus one subfolder per folder that itself has subfolders
@@ -465,6 +493,10 @@ def json_to_gpx_organized(json_file: str, output_dir: str) -> None:
     own is written as a single sibling file (folder_name.gpx) instead of a directory
     containing one export.gpx. Only writes files for folders with points or tracks
     directly assigned to them.
+
+    If flat is True, subfolder nesting is ignored entirely: only top-level
+    folders get their own file (directly in output_dir, no subdirectories), each
+    containing everything anywhere in its subtree merged into one level.
     """
     with open(json_file, "r", encoding='utf-8') as f:
         data: dict[str, Any] = json.load(f)
@@ -528,6 +560,35 @@ def json_to_gpx_organized(json_file: str, output_dir: str) -> None:
         return len(points) + len(tracks)
 
     os.makedirs(output_dir, exist_ok=True)
+
+    if flat:
+        points_by_top = _group_by_top_level(data.get("points", []), folder_by_id)
+        tracks_by_top = _group_by_top_level(data.get("tracks", []), folder_by_id)
+
+        files_written = 0
+        files_written += 1 if write_gpx(
+            os.path.join(output_dir, "export.gpx"),
+            os.path.basename(os.path.normpath(output_dir)),
+            points_by_top.get(None, []),
+            tracks_by_top.get(None, []),
+        ) else 0
+
+        top_ids = sorted(
+            (set(points_by_top) | set(tracks_by_top)) - {None},
+            key=lambda fid: folder_by_id[fid]["name"].lower(),
+        )
+        for top_id in top_ids:
+            output_path = os.path.join(output_dir, f"{_safe_folder_name(folder_by_id[top_id]['name'])}.gpx")
+            files_written += 1 if write_gpx(
+                output_path,
+                folder_by_id[top_id]["name"],
+                points_by_top.get(top_id, []),
+                tracks_by_top.get(top_id, []),
+            ) else 0
+
+        print(f"✅ Organized (flat) GPX export saved to {output_dir} ({files_written} files)")
+        return
+
     for folder_id in branch_folder_ids:
         os.makedirs(dir_for_folder(folder_id), exist_ok=True)
 
@@ -624,7 +685,7 @@ def json_to_kml(json_file: str, output_file: str, compress: bool = False) -> Non
         print(f"✅ KML saved to {output_file}")
 
 
-def json_to_kml_organized(json_file: str, output_dir: str, compress: bool = False) -> None:
+def json_to_kml_organized(json_file: str, output_dir: str, compress: bool = False, flat: bool = False) -> None:
     """Export JSON data as a tree of KML/KMZ files mirroring the data's folder structure.
 
     Creates output_dir plus one subfolder per folder that itself has subfolders
@@ -632,6 +693,10 @@ def json_to_kml_organized(json_file: str, output_dir: str, compress: bool = Fals
     own is written as a single sibling file (folder_name.kml/.kmz) instead of a
     directory containing one export.kml/.kmz. Only writes files for folders with
     points or tracks directly assigned to them.
+
+    If flat is True, subfolder nesting is ignored entirely: only top-level
+    folders get their own file (directly in output_dir, no subdirectories), each
+    containing everything anywhere in its subtree merged into one level.
     """
     with open(json_file, "r", encoding='utf-8') as f:
         data: dict[str, Any] = json.load(f)
@@ -704,6 +769,35 @@ def json_to_kml_organized(json_file: str, output_dir: str, compress: bool = Fals
         return len(points) + exported_tracks
 
     os.makedirs(output_dir, exist_ok=True)
+
+    if flat:
+        points_by_top = _group_by_top_level(data.get("points", []), folder_by_id)
+        tracks_by_top = _group_by_top_level(data.get("tracks", []), folder_by_id)
+
+        files_written = 0
+        files_written += 1 if write_kml(
+            os.path.join(output_dir, f"export.{ext}"),
+            os.path.basename(os.path.normpath(output_dir)),
+            points_by_top.get(None, []),
+            tracks_by_top.get(None, []),
+        ) else 0
+
+        top_ids = sorted(
+            (set(points_by_top) | set(tracks_by_top)) - {None},
+            key=lambda fid: folder_by_id[fid]["name"].lower(),
+        )
+        for top_id in top_ids:
+            output_path = os.path.join(output_dir, f"{_safe_folder_name(folder_by_id[top_id]['name'])}.{ext}")
+            files_written += 1 if write_kml(
+                output_path,
+                folder_by_id[top_id]["name"],
+                points_by_top.get(top_id, []),
+                tracks_by_top.get(top_id, []),
+            ) else 0
+
+        print(f"✅ Organized (flat) {ext.upper()} export saved to {output_dir} ({files_written} files)")
+        return
+
     for folder_id in branch_folder_ids:
         os.makedirs(dir_for_folder(folder_id), exist_ok=True)
 
@@ -974,11 +1068,16 @@ def export_selected_gpx(json_file: str, output_file: str, ids: list[str]) -> int
     return len(points) + len(tracks)
 
 
-def export_selected_gpx_organized(json_file: str, output_dir: str, ids: list[str]) -> int:
+def export_selected_gpx_organized(json_file: str, output_dir: str, ids: list[str], flat: bool = False) -> int:
     """Export selected items as a tree of GPX files mirroring folder structure.
 
     A used folder with no used subfolders of its own is written as a single sibling
     file (folder_name.gpx) instead of a directory containing one export.gpx.
+
+    If flat is True, subfolder nesting is ignored entirely: only top-level
+    folders get their own file (directly in output_dir, no subdirectories), each
+    containing everything anywhere in its subtree merged into one level.
+
     Returns count of exported items.
     """
     with open(json_file, "r", encoding='utf-8') as f:
@@ -1063,6 +1162,33 @@ def export_selected_gpx_organized(json_file: str, output_dir: str, ids: list[str
         return len(folder_points) + len(folder_tracks)
 
     os.makedirs(output_dir, exist_ok=True)
+
+    if flat:
+        points_by_top = _group_by_top_level(points, folder_by_id)
+        tracks_by_top = _group_by_top_level(tracks, folder_by_id)
+
+        total = write_gpx(
+            os.path.join(output_dir, "export.gpx"),
+            os.path.basename(os.path.normpath(output_dir)),
+            points_by_top.get(None, []),
+            tracks_by_top.get(None, []),
+        )
+
+        top_ids = sorted(
+            (set(points_by_top) | set(tracks_by_top)) - {None},
+            key=lambda fid: folder_by_id[fid]["name"].lower(),
+        )
+        for top_id in top_ids:
+            output_path = os.path.join(output_dir, f"{_safe_folder_name(folder_by_id[top_id]['name'])}.gpx")
+            total += write_gpx(
+                output_path,
+                folder_by_id[top_id]["name"],
+                points_by_top.get(top_id, []),
+                tracks_by_top.get(top_id, []),
+            )
+
+        return total
+
     for folder_id in branch_folder_ids:
         os.makedirs(dir_for_folder(folder_id), exist_ok=True)
 
@@ -1180,11 +1306,16 @@ def export_selected_kml(json_file: str, output_file: str, ids: list[str], compre
     return len(points) + exported_tracks
 
 
-def export_selected_kml_organized(json_file: str, output_dir: str, ids: list[str], compress: bool = False) -> int:
+def export_selected_kml_organized(json_file: str, output_dir: str, ids: list[str], compress: bool = False, flat: bool = False) -> int:
     """Export selected items as a tree of KML/KMZ files mirroring folder structure.
 
     A used folder with no used subfolders of its own is written as a single sibling
     file (folder_name.kml/.kmz) instead of a directory containing one export.kml/.kmz.
+
+    If flat is True, subfolder nesting is ignored entirely: only top-level
+    folders get their own file (directly in output_dir, no subdirectories), each
+    containing everything anywhere in its subtree merged into one level.
+
     Returns count of exported items.
     """
     with open(json_file, "r", encoding='utf-8') as f:
@@ -1278,6 +1409,33 @@ def export_selected_kml_organized(json_file: str, output_dir: str, ids: list[str
         return len(points) + exported_tracks
 
     os.makedirs(output_dir, exist_ok=True)
+
+    if flat:
+        points_by_top = _group_by_top_level(points, folder_by_id)
+        tracks_by_top = _group_by_top_level(tracks, folder_by_id)
+
+        total = write_kml(
+            os.path.join(output_dir, f"export.{ext}"),
+            os.path.basename(os.path.normpath(output_dir)),
+            points_by_top.get(None, []),
+            tracks_by_top.get(None, []),
+        )
+
+        top_ids = sorted(
+            (set(points_by_top) | set(tracks_by_top)) - {None},
+            key=lambda fid: folder_by_id[fid]["name"].lower(),
+        )
+        for top_id in top_ids:
+            output_path = os.path.join(output_dir, f"{_safe_folder_name(folder_by_id[top_id]['name'])}.{ext}")
+            total += write_kml(
+                output_path,
+                folder_by_id[top_id]["name"],
+                points_by_top.get(top_id, []),
+                tracks_by_top.get(top_id, []),
+            )
+
+        return total
+
     for folder_id in branch_folder_ids:
         os.makedirs(dir_for_folder(folder_id), exist_ok=True)
 
@@ -1321,14 +1479,16 @@ def main() -> None:
 
     gpx_parser = subparsers.add_parser("json2gpx", help="Convert JSON data to GPX")
     gpx_parser.add_argument("json_file", type=str, help="Input JSON file")
-    gpx_parser.add_argument("output_file", type=str, help="Output GPX file, or output folder if --organized is set")
+    gpx_parser.add_argument("output_file", type=str, help="Output GPX file, or output folder if --organized/--flat is set")
     gpx_parser.add_argument("--organized", action="store_true", help="Export a folder tree mirroring the data's folder structure, with one export.gpx per folder")
+    gpx_parser.add_argument("--flat", action="store_true", help="Like --organized, but only one level deep: one file per top-level folder, with everything in its subtree merged into it")
 
     kml_parser = subparsers.add_parser("json2kml", help="Convert JSON data to KML")
     kml_parser.add_argument("json_file", type=str, help="Input JSON file")
-    kml_parser.add_argument("output_file", type=str, help="Output KML/KMZ file, or output folder if --organized is set")
+    kml_parser.add_argument("output_file", type=str, help="Output KML/KMZ file, or output folder if --organized/--flat is set")
     kml_parser.add_argument("--compress", action="store_true", help="Create KMZ file instead of KML")
     kml_parser.add_argument("--organized", action="store_true", help="Export a folder tree mirroring the data's folder structure, with one export.kml/export.kmz per folder")
+    kml_parser.add_argument("--flat", action="store_true", help="Like --organized, but only one level deep: one file per top-level folder, with everything in its subtree merged into it")
 
     delete_parser = subparsers.add_parser("delete", help="Delete items by ID")
     delete_parser.add_argument("--json-file", type=str, required=True, help="JSON data file")
@@ -1359,13 +1519,13 @@ def main() -> None:
 
         extract_data(args.input_dir, args.json_file, args.geojson_file, args.filenames_folders)
     elif args.command == "json2gpx":
-        if args.organized:
-            json_to_gpx_organized(args.json_file, args.output_file)
+        if args.organized or args.flat:
+            json_to_gpx_organized(args.json_file, args.output_file, args.flat)
         else:
             json_to_gpx(args.json_file, args.output_file)
     elif args.command == "json2kml":
-        if args.organized:
-            json_to_kml_organized(args.json_file, args.output_file, args.compress)
+        if args.organized or args.flat:
+            json_to_kml_organized(args.json_file, args.output_file, args.compress, args.flat)
         else:
             json_to_kml(args.json_file, args.output_file, args.compress)
     elif args.command == "delete":

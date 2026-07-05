@@ -819,13 +819,13 @@ class DataViewer:
         self.stdscr.getch()  # Consume any key or timeout
         self.stdscr.timeout(100)  # Restore normal timeout
 
-    def export_dialog(self) -> tuple[str, str, bool, bool] | None:
-        """Show export format dialog. Returns (format, filename, compress, organized) or None if cancelled."""
+    def export_dialog(self) -> tuple[str, str, bool, bool, bool] | None:
+        """Show export format dialog. Returns (format, filename, compress, organized, flat) or None if cancelled."""
         from cursesmenu.items import MenuItem
 
         formats = [("gpx", "GPX"), ("kml", "KML"), ("kmz", "KMZ")]
         selection = {"index": 0}
-        toggles = {"organized": True}
+        toggles = {"organized": True, "flat": False}
 
         class RadioItem(MenuItem):
             """A format choice; selecting it toggles the radio mark instead of exiting."""
@@ -859,8 +859,8 @@ class DataViewer:
             def __init__(self) -> None:
                 super().__init__(text="OK", should_exit=True)
 
-            def get_return(self) -> tuple[int, bool]:
-                return (selection["index"], toggles["organized"])
+            def get_return(self) -> tuple[int, bool, bool]:
+                return (selection["index"], toggles["organized"], toggles["flat"])
 
         class CancelItem(MenuItem):
             def __init__(self) -> None:
@@ -873,6 +873,7 @@ class DataViewer:
         for i, (_, label) in enumerate(formats):
             menu.items.append(RadioItem(label, i))
         menu.items.append(ToggleItem("Organized", "organized"))
+        menu.items.append(ToggleItem("Flat (top-level folders only)", "flat"))
         menu.items.append(ConfirmItem())
         menu.items.append(CancelItem())
 
@@ -886,21 +887,22 @@ class DataViewer:
         if menu_result is None:
             return None
 
-        result_index, organized = menu_result
+        result_index, organized, flat = menu_result
         fmt, _ = formats[result_index]
         compress = fmt == "kmz"
+        tree_mode = organized or flat  # Flat implies a folder tree output too
 
-        if organized:
+        if tree_mode:
             folder_name = self.prompt_foldername("export")
             if not folder_name:
                 return None
-            return (fmt, folder_name, compress, organized)
+            return (fmt, folder_name, compress, tree_mode, flat)
 
         default_name = f"export.{fmt}"
         result = self.prompt_filename(fmt, default_name)
         if not result:
             return None
-        return (result[0], result[1], compress, organized)
+        return (result[0], result[1], compress, tree_mode, flat)
 
     def prompt_filename(self, fmt: str, default: str) -> tuple[str, str] | None:
         """Prompt user for filename. Returns (format, filename) or None."""
@@ -924,7 +926,7 @@ class DataViewer:
         if not result:
             return
 
-        fmt, path, compress, organized = result
+        fmt, path, compress, organized, flat = result
         ids_to_export = ids
 
         from tracktools import (
@@ -936,12 +938,12 @@ class DataViewer:
 
         if fmt == "gpx":
             if organized:
-                count = export_selected_gpx_organized(str(self.data_path), path, ids_to_export)
+                count = export_selected_gpx_organized(str(self.data_path), path, ids_to_export, flat)
             else:
                 count = export_selected_gpx(str(self.data_path), path, ids_to_export)
         else:
             if organized:
-                count = export_selected_kml_organized(str(self.data_path), path, ids_to_export, compress)
+                count = export_selected_kml_organized(str(self.data_path), path, ids_to_export, compress, flat)
             else:
                 count = export_selected_kml(str(self.data_path), path, ids_to_export, compress, organize=False)
 
