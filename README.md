@@ -94,10 +94,10 @@ Keys:
 - `Space` — toggle multi-selection (selecting a folder implicitly selects its contents)
 - `F2` — rename the item under the cursor (prompts for a new name), writing changes back to the JSON file
 - `F4` — extract more data: prompts for a directory and merges its GPX/KML files into the current JSON file
-- `F5` — move the current selection to a chosen destination folder (or the top level), writing changes back to the JSON file
-- `F6` — export the current selection to GPX/KML/KMZ (prompts for format and filename)
+- `F5` — move the current selection (or the item under the cursor, if nothing is selected) to a chosen destination folder (or the top level), writing changes back to the JSON file
+- `F6` — export the current selection (or the item under the cursor, if nothing is selected) to GPX/KML/KMZ (prompts for format and filename)
 - `F7` — create a new folder: prompts you to pick a destination folder (or the top level) from the same kind of picker `F5` uses, then asks for a name
-- `F8` — delete the current selection (with confirmation), writing changes back to the JSON file
+- `F8` — delete the current selection (or the item under the cursor, if nothing is selected), with confirmation, writing changes back to the JSON file
 - `Esc`/`Backspace` — back out of detail view
 - `q` — quit
 

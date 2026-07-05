@@ -417,6 +417,17 @@ class DataViewer:
                 ids.update(self.collect_descendant_ids(child))
         return ids
 
+    def _target_ids(self) -> list[str]:
+        """IDs to act on: the current multi-selection, or the item under the
+        cursor if nothing is selected."""
+        if self.selected_ids:
+            return list(self.selected_ids)
+        if self.visible_items:
+            node, _ = self.visible_items[self.cursor]
+            if node.id:
+                return [node.id]
+        return []
+
     def get_list_height(self) -> int:
         """Get available height for the list."""
         height, _ = self.stdscr.getmaxyx()
@@ -521,10 +532,8 @@ class DataViewer:
         
         # Status bar
         sel_count = len(self.selected_ids)
-        if sel_count > 0:
-            status = f" ↑↓:Nav  Space:Select  F2:Rename  F4:Extract  F5:Move  F6:Export  F7:NewFolder  F8:Delete  Enter:Details  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] ({sel_count} sel) "
-        else:
-            status = f" ↑↓:Nav  Space:Select  F2:Rename  F4:Extract  F7:NewFolder  Enter:Details/Toggle  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}] "
+        sel_suffix = f" ({sel_count} sel)" if sel_count > 0 else ""
+        status = f" ↑↓:Nav  Space:Select  F2:Rename  F4:Extract  F5:Move  F6:Export  F7:NewFolder  F8:Delete  Enter:Details  q:Quit  [{self.cursor + 1}/{len(self.visible_items)}]{sel_suffix} "
         self.stdscr.attron(curses.color_pair(5))
         try:
             self.stdscr.addstr(height - 1, 0, status.ljust(width - 1)[:width-1])
@@ -665,18 +674,17 @@ class DataViewer:
         """Show delete confirmation dialog. Returns True if confirmed."""
         return confirm(
             self.stdscr,
-            f"Delete {count} selected item{'s' if count > 1 else ''}?",
+            f"Delete {count} item{'s' if count > 1 else ''}?",
             yes_label="Yes, delete",
             no_label="No, cancel",
         )
 
-    def delete_selected(self) -> None:
-        """Delete selected items and reload data."""
+    def delete_selected(self, ids: list[str]) -> None:
+        """Delete the given items and reload data."""
         from tracktools import delete_items
-        
-        ids_to_delete = list(self.selected_ids)
-        deleted = delete_items(str(self.data_path), ids_to_delete)
-        
+
+        deleted = delete_items(str(self.data_path), ids)
+
         # Reload data
         self.data = load_data(str(self.data_path))
         self.points = self.data.get("points", [])
@@ -684,11 +692,11 @@ class DataViewer:
         self.tree = build_tree(self.data)
         self.selected_ids.clear()
         self.refresh_visible_items()
-        
+
         # Adjust cursor if needed
         if self.cursor >= len(self.visible_items):
             self.cursor = max(0, len(self.visible_items) - 1)
-        
+
         # Show result
         self.show_message(f"Deleted {deleted} items")
 
@@ -910,14 +918,14 @@ class DataViewer:
         """Prompt user for an output folder name. Returns the folder name/path or None."""
         return prompt_text(self.stdscr, "Folder name", default)
 
-    def export_selected(self) -> None:
-        """Export selected items to GPX or KML/KMZ."""
+    def export_selected(self, ids: list[str]) -> None:
+        """Export the given items to GPX or KML/KMZ."""
         result = self.export_dialog()
         if not result:
             return
 
         fmt, path, compress, organized = result
-        ids_to_export = list(self.selected_ids)
+        ids_to_export = ids
 
         from tracktools import (
             export_selected_gpx,
@@ -939,16 +947,13 @@ class DataViewer:
 
         self.show_message(f"Exported {count} items to {path}")
 
-    def move_selected(self) -> None:
-        """Move selected items to a chosen destination folder (or root) and reload data."""
-        if not self.selected_ids:
-            return
-
+    def move_selected(self, ids: list[str]) -> None:
+        """Move the given items to a chosen destination folder (or root) and reload data."""
         folders = self.data.get("folders", [])
         folder_by_id = {f["id"]: f for f in folders}
 
         # Folders that would create a cycle if used as the destination: any
-        # selected folder itself, plus all of its descendants.
+        # folder being moved itself, plus all of its descendants.
         excluded: set[str] = set()
 
         def mark_folder_and_children(folder_id: str) -> None:
@@ -957,7 +962,7 @@ class DataViewer:
                 if f.get("parent_id") == folder_id:
                     mark_folder_and_children(f["id"])
 
-        for item_id in self.selected_ids:
+        for item_id in ids:
             if item_id in folder_by_id:
                 mark_folder_and_children(item_id)
 
@@ -970,7 +975,7 @@ class DataViewer:
 
         from tracktools import move_items
 
-        moved = move_items(str(self.data_path), list(self.selected_ids), destination_id)
+        moved = move_items(str(self.data_path), ids, destination_id)
 
         # Reload data
         self.data = load_data(str(self.data_path))
@@ -1061,18 +1066,21 @@ class DataViewer:
                             if self.cursor < len(self.visible_items) - 1:
                                 self.cursor += 1
                 elif key == curses.KEY_F8:
-                    # Delete selected items
-                    if self.selected_ids:
-                        if self.confirm_delete(len(self.selected_ids)):
-                            self.delete_selected()
+                    # Delete selected items, or the item under the cursor if nothing is selected
+                    target_ids = self._target_ids()
+                    if target_ids:
+                        if self.confirm_delete(len(target_ids)):
+                            self.delete_selected(target_ids)
                 elif key == curses.KEY_F6:
-                    # Export selected items
-                    if self.selected_ids:
-                        self.export_selected()
+                    # Export selected items, or the item under the cursor if nothing is selected
+                    target_ids = self._target_ids()
+                    if target_ids:
+                        self.export_selected(target_ids)
                 elif key == curses.KEY_F5:
-                    # Move selected items
-                    if self.selected_ids:
-                        self.move_selected()
+                    # Move selected items, or the item under the cursor if nothing is selected
+                    target_ids = self._target_ids()
+                    if target_ids:
+                        self.move_selected(target_ids)
                 elif key == curses.KEY_F2:
                     # Rename item under cursor
                     self.rename_current()
