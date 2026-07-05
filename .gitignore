@@ -5,5 +5,5 @@ Backup/
 gpx/
 kml/
 Карты/
-data.json
+*.json
 export*
