@@ -297,11 +297,31 @@ def process_kml_file(file_path: str, output: OutputData, folder_id: str | None =
         print(f"⚠️  Could not parse {file_path}: {e}")
 
 
-def extract_data(input_dir: str, json_file: str, geojson_file: str, use_filenames: bool = False) -> tuple[int, int, int]:
+def _point_coord_key(point: dict[str, Any]) -> tuple[float, float]:
+    return (point["latitude"], point["longitude"])
+
+
+def _track_coord_key(track: dict[str, Any]) -> tuple[tuple[float, float], ...]:
+    return tuple(_point_coord_key(pt) for pt in track["points"])
+
+
+def extract_data(
+    input_dir: str,
+    json_file: str,
+    geojson_file: str,
+    use_filenames: bool = False,
+    remove_duplicates: bool = False,
+) -> tuple[int, int, int]:
     """Extract GPX/KML files under input_dir into json_file/geojson_file.
 
     If json_file already exists, its folders/points/tracks are kept and the newly
     extracted ones are appended to them (merge), rather than overwriting the file.
+
+    If remove_duplicates is True, newly extracted points/tracks whose coordinates
+    exactly match an already-existing point/track (points by their own
+    coordinate, tracks by the full ordered sequence of their points'
+    coordinates) are dropped instead of being appended.
+
     Returns (new_points, new_tracks, new_folders) counts.
     """
     output: OutputData = {"folders": [], "points": [], "tracks": []}
@@ -318,8 +338,19 @@ def extract_data(input_dir: str, json_file: str, geojson_file: str, use_filename
     existing_tracks = len(output["tracks"])
     existing_folders = len(output["folders"])
 
-    folder_registry: dict[str, str] = {}
     folder_objects: list[FolderData] = list(output["folders"])
+
+    def _existing_folder_path(folder_id: str, folder_by_id: dict[str, FolderData]) -> str:
+        folder = folder_by_id[folder_id]
+        parent_id = folder.get("parent_id")
+        if parent_id and parent_id in folder_by_id:
+            return os.path.join(_existing_folder_path(parent_id, folder_by_id), folder["name"])
+        return folder["name"]
+
+    folder_by_id = {f["id"]: f for f in folder_objects}
+    folder_registry: dict[str, str] = {
+        _existing_folder_path(f["id"], folder_by_id): f["id"] for f in folder_objects
+    }
 
     def get_or_create_folder(folder_path: str, parent_id: str | None = None) -> str:
         """Get or create folder hierarchy, return the deepest folder's ID."""
@@ -370,6 +401,27 @@ def extract_data(input_dir: str, json_file: str, geojson_file: str, use_filename
                 process_kml_file(file_path, output, file_folder_id)
     
     output["folders"] = folder_objects
+
+    if remove_duplicates:
+        seen_point_keys = {_point_coord_key(p) for p in output["points"][:existing_points]}
+        deduped_points: list[PointData] = []
+        for point in output["points"][existing_points:]:
+            key = _point_coord_key(point)
+            if key in seen_point_keys:
+                continue
+            seen_point_keys.add(key)
+            deduped_points.append(point)
+        output["points"] = output["points"][:existing_points] + deduped_points
+
+        seen_track_keys = {_track_coord_key(t) for t in output["tracks"][:existing_tracks]}
+        deduped_tracks: list[TrackData] = []
+        for track in output["tracks"][existing_tracks:]:
+            key = _track_coord_key(track)
+            if key in seen_track_keys:
+                continue
+            seen_track_keys.add(key)
+            deduped_tracks.append(track)
+        output["tracks"] = output["tracks"][:existing_tracks] + deduped_tracks
 
     new_points = len(output["points"]) - existing_points
     new_tracks = len(output["tracks"]) - existing_tracks
@@ -1472,6 +1524,7 @@ def main() -> None:
     extract_parser.add_argument("--json-file", type=str, help="Output JSON file")
     extract_parser.add_argument("--geojson-file", type=str, help="Output GeoJSON file")
     extract_parser.add_argument("--filenames-folders", action="store_true", help="Use source filenames as folder names")
+    extract_parser.add_argument("--remove-duplicates", action="store_true", help="When merging into an existing JSON file, skip points/tracks whose coordinates exactly match ones already in it")
 
     gpx_parser = subparsers.add_parser("json2gpx", help="Convert JSON data to GPX")
     gpx_parser.add_argument("json_file", type=str, help="Input JSON file")
@@ -1513,7 +1566,7 @@ def main() -> None:
             print("⚠️  --json-file or --geojson-file are required for extract command")
             return
 
-        extract_data(args.input_dir, args.json_file, args.geojson_file, args.filenames_folders)
+        extract_data(args.input_dir, args.json_file, args.geojson_file, args.filenames_folders, args.remove_duplicates)
     elif args.command == "json2gpx":
         if args.organized or args.flat:
             json_to_gpx_organized(args.json_file, args.output_file, args.flat)

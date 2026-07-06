@@ -751,9 +751,19 @@ class DataViewer:
             self.show_message(f"⚠️  Directory not found: {input_dir}")
             return
 
+        remove_duplicates = confirm(
+            self.stdscr,
+            "Remove duplicates?",
+            "Skip points/tracks whose coordinates already exist in the file",
+            yes_label="Yes, remove duplicates",
+            no_label="No, add everything",
+        )
+
         from tracktools import extract_data
 
-        new_points, new_tracks, new_folders = extract_data(input_dir, str(self.data_path), None, use_filenames=True)
+        new_points, new_tracks, new_folders = extract_data(
+            input_dir, str(self.data_path), None, use_filenames=True, remove_duplicates=remove_duplicates
+        )
 
         # Reload data
         self.data = load_data(str(self.data_path))
